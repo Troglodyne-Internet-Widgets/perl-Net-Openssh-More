@@ -108,128 +108,6 @@ my %defaults = (
 );
 
 my %cache;
-sub new {
-    my ( $class, %opts ) = @_;
-    $die_no_trace->( "No host given to $class.", 'PEBCAK' ) if !$opts{'host'};
-
-    # Set defaults, check if we can return early
-    %opts = ( %defaults, %opts );
-	$opts{'_cache_index'} = "$opts{'user'}_$opts{'host'}_$opts{'port'}";
-    return $cache{$opts{'_cache_index'}} unless $opts{'no_cache'} || !$cache{$opts{'_cache_index'}};
-
-	# Figure out how we're gonna login
-    $opts{'_login_method'} = $resolve_login_method->(\%opts);
-
-    # check permissions on base files if we got here
-    $check_local_perms->( "$home/.ssh",        0700, 1 ) if -e "$home/.ssh";
-    $check_local_perms->( "$home/.ssh/config", 0600 )    if -e "$home/.ssh/config";
-
-    # Make the connection
-    my $self = $cache{$opts{'_cache_index'}} = $init_ssh->( $class, \%opts );
-
-    # Stash the originating pid, as running the destructor when
-    # you have forked past instantiation means you have a bad time
-    $self->{'ppid'} = $$;
-
-    # Stash opts for later
-    $self->{'_opts'} = \%opts;
-
-    # Establish persistent shell, etc.
-    $post_connect->( $self, \%opts );
-
-    return $self;
-};
-
-=head2 DESTROY
-
-Noted in POD only because of some behavior differences between the
-parent module and this. The following actions are taken *before*
-the parent's destructor kicks in:
-* Return early if you aren't the PID which created the object.
-
-=cut
-
-my $disable_destructor = 0;
-sub DESTROY {
-    return if $$ != $self->{'ppid'} || $disable_destructor;
-	$ENV{SSH_AUTH_SOCK} = $self->{'_opts'}{'_restore_auth_sock'} if $self->{'_opts'}{'_restore_auth_sock'};
-    $self->{'persistent_shell'}->close() if $self->{'persistent_shell'};
-
-    return $self->SUPER::DESTROY();
-}
-
-=head2 diag
-
-Print a diagnostic message to STDOUT.
-Optionally prefixed by what you passed in as $opts{'output_prefix'} in the constructor.
-I use this in several places when $opts{'debug'} is passed to the constructor.
-
-ACCEPTS LIST of messages.
-
-RETURNS undef.
-
-=cut
-
-sub diag {
-    my ( $self, @msgs ) = @_;
-    print STDOUT "$self->{'_opts'}{'output_prefix'}$_\n" for @msgs;
-    return;
-}
-
-=head2 cmd
-
-Execute specified command via SSH. If first arg is HASHREF, then it uses that as options.
-Command is specifed as a LIST, as that's the easiest way to ensure escaping is done correctly.
-
-$opts HASHREF:
-C<no_persist> - Boolean - Whether or not to use persistent shell if that is enabled.
-C<no_stderr> - Boolean - Whether or not to discard STDERR.
-
-C<command> - LIST of components combined together to make a shell command.
-
-Returns LIST STDOUT, STDERR, and exit code from executed command.
-
-    my ($out,$err,$ret) = $ssh->cmd(qw{ip addr show});
-
-If use_persistent_shell was truthy in the constructor,
-then commands are executed in a persistent Expect session to cut down on forks,
-and in general be more efficient.
-
-However, some things can hang this up.
-Unterminated Heredoc & strings, for instance.
-Also, long running commands that emit no output will time out.
-Also, be careful with changing directory;
-this can cause unexpected side-effects in your code.
-Changing shell with chsh will also be ignored;
-the persistent shell is what you started with no matter what.
-In those cases, you should pass no_persist as a true value to fork and execute the command by itself.
-
-If the 'debug' opt to the constructor is set, every command executed hereby will be printed.
-
-If no_stderr is passed, stderr will not be gathered (it takes writing/reading to a file, which is additional time cost).
-
-BUGS:
-
-In no_persist mode, stderr and stdout are merged, making the $err parameter returned less than useful.
-
-=cut
-
-sub cmd {
-    my ( $self ) = shift;
-	my $opts = ref $_[0] eq 'HASH' ? shift : {};
-	my @cmd = @_;
-
-    $die_no_trace->( 'No command specified', 'PEBCAK' ) if !@cmd;
-    $diag("[DEBUG][$self->{'_opts'}{'host'}] EXEC " . join( " ", @cmd ) ) if $self->{'_opts'}{'debug'};
-
-    my $ret = $no_persist ? $send->( $self, undef, @cmd ) : $self->_do_persistent_command( \@cmd, $opts->{'no_stderr'} );
-    chomp( my $out = $self->read );
-    my $err = $self->error;
-
-    $self->{'last_exit_code'} = $ret;
-    return ( $out, $err, $ret );
-}
-
 
 ###################
 # PRIVATE METHODS #
@@ -580,6 +458,129 @@ my $trim = sub {
 #######################
 # END PRIVATE METHODS #
 #######################
+
+sub new {
+    my ( $class, %opts ) = @_;
+    $die_no_trace->( "No host given to $class.", 'PEBCAK' ) if !$opts{'host'};
+
+    # Set defaults, check if we can return early
+    %opts = ( %defaults, %opts );
+	$opts{'_cache_index'} = "$opts{'user'}_$opts{'host'}_$opts{'port'}";
+    return $cache{$opts{'_cache_index'}} unless $opts{'no_cache'} || !$cache{$opts{'_cache_index'}};
+
+	# Figure out how we're gonna login
+    $opts{'_login_method'} = $resolve_login_method->(\%opts);
+
+    # check permissions on base files if we got here
+    $check_local_perms->( "$home/.ssh",        0700, 1 ) if -e "$home/.ssh";
+    $check_local_perms->( "$home/.ssh/config", 0600 )    if -e "$home/.ssh/config";
+
+    # Make the connection
+    my $self = $cache{$opts{'_cache_index'}} = $init_ssh->( $class, \%opts );
+
+    # Stash the originating pid, as running the destructor when
+    # you have forked past instantiation means you have a bad time
+    $self->{'ppid'} = $$;
+
+    # Stash opts for later
+    $self->{'_opts'} = \%opts;
+
+    # Establish persistent shell, etc.
+    $post_connect->( $self, \%opts );
+
+    return $self;
+};
+
+=head2 DESTROY
+
+Noted in POD only because of some behavior differences between the
+parent module and this. The following actions are taken *before*
+the parent's destructor kicks in:
+* Return early if you aren't the PID which created the object.
+
+=cut
+
+my $disable_destructor = 0;
+sub DESTROY {
+    return if $$ != $self->{'ppid'} || $disable_destructor;
+	$ENV{SSH_AUTH_SOCK} = $self->{'_opts'}{'_restore_auth_sock'} if $self->{'_opts'}{'_restore_auth_sock'};
+    $self->{'persistent_shell'}->close() if $self->{'persistent_shell'};
+
+    return $self->SUPER::DESTROY();
+}
+
+=head2 diag
+
+Print a diagnostic message to STDOUT.
+Optionally prefixed by what you passed in as $opts{'output_prefix'} in the constructor.
+I use this in several places when $opts{'debug'} is passed to the constructor.
+
+ACCEPTS LIST of messages.
+
+RETURNS undef.
+
+=cut
+
+sub diag {
+    my ( $self, @msgs ) = @_;
+    print STDOUT "$self->{'_opts'}{'output_prefix'}$_\n" for @msgs;
+    return;
+}
+
+=head2 cmd
+
+Execute specified command via SSH. If first arg is HASHREF, then it uses that as options.
+Command is specifed as a LIST, as that's the easiest way to ensure escaping is done correctly.
+
+$opts HASHREF:
+C<no_persist> - Boolean - Whether or not to use persistent shell if that is enabled.
+C<no_stderr> - Boolean - Whether or not to discard STDERR.
+
+C<command> - LIST of components combined together to make a shell command.
+
+Returns LIST STDOUT, STDERR, and exit code from executed command.
+
+    my ($out,$err,$ret) = $ssh->cmd(qw{ip addr show});
+
+If use_persistent_shell was truthy in the constructor,
+then commands are executed in a persistent Expect session to cut down on forks,
+and in general be more efficient.
+
+However, some things can hang this up.
+Unterminated Heredoc & strings, for instance.
+Also, long running commands that emit no output will time out.
+Also, be careful with changing directory;
+this can cause unexpected side-effects in your code.
+Changing shell with chsh will also be ignored;
+the persistent shell is what you started with no matter what.
+In those cases, you should pass no_persist as a true value to fork and execute the command by itself.
+
+If the 'debug' opt to the constructor is set, every command executed hereby will be printed.
+
+If no_stderr is passed, stderr will not be gathered (it takes writing/reading to a file, which is additional time cost).
+
+BUGS:
+
+In no_persist mode, stderr and stdout are merged, making the $err parameter returned less than useful.
+
+=cut
+
+sub cmd {
+    my ( $self ) = shift;
+	my $opts = ref $_[0] eq 'HASH' ? shift : {};
+	my @cmd = @_;
+
+    $die_no_trace->( 'No command specified', 'PEBCAK' ) if !@cmd;
+    $diag("[DEBUG][$self->{'_opts'}{'host'}] EXEC " . join( " ", @cmd ) ) if $self->{'_opts'}{'debug'};
+
+    my $ret = $no_persist ? $send->( $self, undef, @cmd ) : $self->_do_persistent_command( \@cmd, $opts->{'no_stderr'} );
+    chomp( my $out = $self->read );
+    my $err = $self->error;
+
+    $self->{'last_exit_code'} = $ret;
+    return ( $out, $err, $ret );
+}
+
 
 =head1 AUTHORS
 
