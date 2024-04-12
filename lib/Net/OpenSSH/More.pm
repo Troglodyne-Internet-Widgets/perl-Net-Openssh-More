@@ -108,6 +108,7 @@ my %defaults = (
 );
 
 my %cache;
+our $disable_destructor = 0;
 
 ###################
 # PRIVATE METHODS #
@@ -118,22 +119,6 @@ my $die_no_trace = sub {
     $summary ||= 'FATAL';
     my $carp = $INC{'Carp/Always.pm'} ? '' : ' - Use Carp::Always for full trace.';
     die "[$summary] ${full_msg}${carp}";
-};
-
-my $resolve_login_method = sub {
-    my ( $opts ) = @_;
-
-    my $chosen = first { $opts->{$_} } qw{key_path password};
-    undef $chosen if $chosen eq 'key_path' && !$check_local_perms->( $opts->{'key_path'}, 0600 );
-    return $chosen if $chosen;
-    return 'SSH_AUTH_SOCK' if $ENV{'SSH_AUTH_SOCK'};
-    my $fallback_path = "$opts->{'home'}/.ssh/id";
-    ( $opts->{'key_path'} ) = map { "${fallback_path}_$_" } ( first { -s "${fallback_path}_$_" } qw{dsa rsa ecdsa} );
-
-    $die_no_trace->('No key_path or password specified and no active SSH agent; cannot connect') if !$opts->{'key_path'};
-    $check_local_perms->( $self->{'key_path'}, 0600 ) if $opts->{'key_path'};
-
-    return $opts->{'key_path'};
 };
 
 my $check_local_perms = sub {
@@ -148,12 +133,59 @@ my $check_local_perms = sub {
     return 1;
 };
 
+my $resolve_login_method = sub {
+    my ( $opts ) = @_;
+
+    my $chosen = first { $opts->{$_} } qw{key_path password};
+    undef $chosen if $chosen eq 'key_path' && !$check_local_perms->( $opts->{'key_path'}, 0600 );
+    return $chosen if $chosen;
+    return 'SSH_AUTH_SOCK' if $ENV{'SSH_AUTH_SOCK'};
+    my $fallback_path = "$opts->{'home'}/.ssh/id";
+    ( $opts->{'key_path'} ) = map { "${fallback_path}_$_" } ( first { -s "${fallback_path}_$_" } qw{dsa rsa ecdsa} );
+
+    $die_no_trace->('No key_path or password specified and no active SSH agent; cannot connect') if !$opts->{'key_path'};
+    $check_local_perms->( $opts->{'key_path'}, 0600 ) if $opts->{'key_path'};
+
+    return $opts->{'key_path'};
+};
+
+my $get_dns_record_from_hostname = sub {
+    my ( $hostname, $record_type ) = @_;
+    $record_type ||= 'A';
+
+    my $reply = Net::DNS::Resolver->new()->search( $hostname, $record_type );
+	return unless $reply;
+	return { map { $_->type() => $_->address() } grep { $_->type eq $record_type } ( $reply->answer() ) };
+};
+
+# Knock on the server till it responds, or doesn't. Try both ipv4 and ipv6.
+my $ping = sub {
+    my ( $opts ) = @_;
+
+	my $timeout = 30;
+	my $host_info = first { $get_dns_record_from_hostname->( $opts->{'host'}, $_ ) } qw{A AAAA};
+	my ( $r_type ) = keys( %$host_info );
+	my %family_map = ( 'A' => 'INET', 'AAAA' => 'INET6' );
+	my $start = time;
+	while ( ( time - $start ) <= $timeout ) {
+		return 1 if "IO::Socket::$family_map{$r_type}"->new(
+			'PeerAddr' => $host_info->{$r_type},
+			'PeerPort' => $opts->{'port'},
+			'Proto'    => 'tcp',
+			'Timeout'  => $timeout,
+		);
+		diag( { '_opts' => $opts }, "[DEBUG] Waiting for response on $host_info->{$r_type}:$opts->{'port'} ($r_type)..." ) if $opts->{'debug'};
+		select undef, undef, undef, 0.5;    # there's no need to try more than 2 times per second
+	}
+    return 0;
+};
+
 my $init_ssh = sub {
     my ( $class, $opts ) = @_;
 
 	# Always clear the cache if possible when we get here.
 	if( $opts->{'_cache_index'} ) {
-		local $disable_destructor = 1;
+        local $disable_destructor = 1;
 		undef $cache{$opts->{'_cache_index'}};
 	}
 
@@ -169,6 +201,7 @@ my $init_ssh = sub {
 	# Leave no trace!
 	$opts->{'_tmp_obj'} = File::Temp->newdir() if !$opts->{'_tmp_obj'};
     my $tmp_dir = $opts->{'_tmp_obj'}->dirname();
+    my $temp_fh;
 
     # Use an existing connection if possible, otherwise make one
     if ( $ENV{$opts->{'_host_sock_key'}} && -e $ENV{$opts->{'_host_sock_key'}} ) {
@@ -177,10 +210,10 @@ my $init_ssh = sub {
     }
     else {
 		if( !$opts->{'debug'} ) {
-			open( my $temp_fh, ">", "$tmp_dir/STDERR" ) or $die_no_trace->("Can't open $tmp_dir/STDERR for writing: $!");
+			open( $temp_fh, ">", "$tmp_dir/STDERR" ) or $die_no_trace->("Can't open $tmp_dir/STDERR for writing: $!");
 			$opts->{'master_stderr_fh'} = $temp_fh;
 		}
-        $opts->{'ctl_dir'}     = $temp_dir;
+        $opts->{'ctl_dir'}     = $tmp_dir;
         $opts->{'strict_mode'} = 0;
 
         $opts->{'master_opts'} = [
@@ -218,8 +251,8 @@ my $init_ssh = sub {
         }
 
 		# Now, per the POD of Net::OpenSSH, new will NEVER DIE, so just trust it.
-        $self = $class->SUPER::new( $host, %opts );
-		my $error = $ssh->error;
+        $self = $class->SUPER::new( delete $opts->{'host'}, %$opts );
+		my $error = $self->error;
         next unless ref $self eq 'Net::OpenSSH::More' && !$error;
 
         if ( -s $temp_fh ) {
@@ -260,43 +293,12 @@ my $init_ssh = sub {
     return $self;
 };
 
-# Knock on the server till it responds, or doesn't. Try both ipv4 and ipv6.
-$ping = sub {
-    my ( $opts ) = @_;
-
-	my $timeout = 30;
-	my $host_info = first { $get_dns_record_from_hostname->( $opts->{'host'}, $_ ) } qw{A AAAA};
-	my ( $r_type ) = keys( %$host_info );
-	my %family_map = ( 'A' => 'INET', 'AAAA' => 'INET6' );
-	my $start = time;
-	while ( ( time - $start ) <= $timeout ) {
-		return 1 if "IO::Socket::$family_map{$r_type}"->new(
-			'PeerAddr' => $host_info->{$r_type},
-			'PeerPort' => $opts->{'port'},
-			'Proto'    => 'tcp',
-			'Timeout'  => $timeout,
-		);
-		diag( { '_opts' => $opts }, "[DEBUG] Waiting for response on $host_info->{$r_type}:$port ($family)..." ) if $opts->{'debug'};
-		select undef, undef, undef, 0.5;    # there's no need to try more than 2 times per second
-	}
-    return 0;
-};
-
-$get_dns_record_from_hostname = sub {
-    my ( $hostname, $record_type ) = @_;
-    my $record_type ||= 'A';
-
-    my $reply = Net::DNS::Resolver->new()->search( $hostname, $record_type );
-	return unless $reply;
-	return { map { $_->type() => $_->address() } grep { $_->type eq $record_type } ( $reply->answer() ) };
-};
-
 my $connection_check = sub {
     my ( $self ) = @_;
 	local $@;
     eval { $self = $init_ssh->($self->{'_opts'}) unless $self->check_master; };
     return $@ ? 0 : 1;
-}
+};
 
 # Try calling the function.
 # If it fails, then call _connection_check to reconnect if needed.
@@ -307,7 +309,7 @@ my $connection_check = sub {
 #
 # If the control socket has gone away, call
 # _connection_check ahead of time to reconnect it.
-$call_ssh_reinit_if_check_fails = sub {
+my $call_ssh_reinit_if_check_fails = sub {
     my ( $self, $func, @args ) = @_;
 
     $self->_connection_check() if !-S $self->{'_ctl_path'};
@@ -330,9 +332,17 @@ my $post_connect = sub {
     return;
 };
 
+my $trim = sub {
+    my ( $string ) = @_;
+    return '' unless length $string;
+    $string =~ s/^\s+//;
+    $string =~ s/\s+$//;
+    return $string;
+};
+
 my $send = sub {
     my ( $self, $line_reader, @cmd ) = @_;
-    my ( $pty, $err, $pid ) = $call_ssh_reinit_if_check_fails( $self, 'open3pty', @cmd );
+    my ( $pty, $err, $pid ) = $call_ssh_reinit_if_check_fails->( $self, 'open3pty', @cmd );
     $die_no_trace->("Net::OpenSSH::open3pty failed: $err") if( !defined $pid || $self->error() );
 
     $self->{'_out'} = "";
@@ -357,56 +367,9 @@ my $send = sub {
     $self->{'_pid'} = $pid;
     waitpid( $pid, 0 );
     return $? >> 8;
-}
-
-# XXX TODO ALLOW ARRAY YOU BAG BITER
-my $TERMINATOR = "\r\r";
-my $do_persistent_command = sub {
-    my ( $self, $cmd, $no_stderr ) = @_;
-
-    #XXX casting runes, but SSHControl & Cpanel::Expect do it...
-    #local $| = 1;
-    #local $ENV{'TERM'} = 'dumb';
-
-    if ( !$self->{'persistent_shell'} ) {
-        my ( $pty, $pid ) = $self->_call_ssh_reinit_if_check_fails( 'open2pty', 'bash' );
-
-        #XXX this all seems to be waving a dead chicken, but SSHControl and Cpanel::Expect do it, so...
-        $pty->set_raw();
-        $pty->stty( 'raw', 'icrnl', '-echo' );
-        $pty->slave->stty( 'raw', 'icrnl', '-echo' );
-
-        #Hook in expect
-        $self->{'expect'} = Expect->init($pty);
-        $self->{'expect'}->restart_timeout_upon_receive(1);    #Logabandon by default
-        $self->{'expect'}->print("export PS1=''; unset HISTFILE; stty raw icrnl -echo; echo 'EOF' $TERMINATOR");
-        $self->{'expect'}->expect( 10, 'EOF' );
-        $self->{'expect'}->clear_accum();
-        $self->{'expect_timeout'} //= 30;
-
-        #cache
-        $self->{'persistent_shell'} = $pty;
-        $self->{'persistent_pid'}   = $pid;
-    }
-
-    #execute the command
-    my $uuid = Data::UUID->new()->create_str();
-    $cmd .= " 2> /tmp/stderr_$uuid.out" unless $no_stderr;
-    my ( $oot, $code ) = $send_persistent_cmd( $self, $cmd, $uuid );
-    $self->{'_out'} = $oot;
-
-    unless ($no_stderr) {
-
-        #Grab stderr
-        ( $self->{'_err'} ) = $send_persistent_cmd( $self, "cat /tmp/stderr_$uuid.out" );
-
-        #Clean up
-        $send_persistent_cmd( $self, "rm -f /tmp/stderr_$uuid.out" );
-    }
-
-    return int($code);
 };
 
+my $TERMINATOR = "\r\r";
 my $send_persistent_cmd = sub {
     my ( $self, $cmd, $uuid ) = @_;
 
@@ -447,13 +410,52 @@ my $send_persistent_cmd = sub {
     return ( $message, $code );
 };
 
-my $trim = sub {
-    my ( $string ) = @_;
-    return '' unless length $string;
-    $string =~ s/^\s+//;
-    $string =~ s/\s+$//;
-    return $string;
-}
+# XXX TODO ALLOW ARRAY YOU BAG BITER
+my $do_persistent_command = sub {
+    my ( $self, $cmd, $no_stderr ) = @_;
+
+    #XXX casting runes, but SSHControl & Cpanel::Expect do it...
+    #local $| = 1;
+    #local $ENV{'TERM'} = 'dumb';
+
+    if ( !$self->{'persistent_shell'} ) {
+        my ( $pty, $pid ) = $self->_call_ssh_reinit_if_check_fails( 'open2pty', 'bash' );
+
+        #XXX this all seems to be waving a dead chicken, but SSHControl and Cpanel::Expect do it, so...
+        $pty->set_raw();
+        $pty->stty( 'raw', 'icrnl', '-echo' );
+        $pty->slave->stty( 'raw', 'icrnl', '-echo' );
+
+        #Hook in expect
+        $self->{'expect'} = Expect->init($pty);
+        $self->{'expect'}->restart_timeout_upon_receive(1);    #Logabandon by default
+        $self->{'expect'}->print("export PS1=''; unset HISTFILE; stty raw icrnl -echo; echo 'EOF' $TERMINATOR");
+        $self->{'expect'}->expect( 10, 'EOF' );
+        $self->{'expect'}->clear_accum();
+        $self->{'expect_timeout'} //= 30;
+
+        #cache
+        $self->{'persistent_shell'} = $pty;
+        $self->{'persistent_pid'}   = $pid;
+    }
+
+    #execute the command
+    my $uuid = Data::UUID->new()->create_str();
+    $cmd .= " 2> /tmp/stderr_$uuid.out" unless $no_stderr;
+    my ( $oot, $code ) = $send_persistent_cmd->( $self, $cmd, $uuid );
+    $self->{'_out'} = $oot;
+
+    unless ($no_stderr) {
+
+        #Grab stderr
+        ( $self->{'_err'} ) = $send_persistent_cmd->( $self, "cat /tmp/stderr_$uuid.out" );
+
+        #Clean up
+        $send_persistent_cmd->( $self, "rm -f /tmp/stderr_$uuid.out" );
+    }
+
+    return int($code);
+};
 
 #######################
 # END PRIVATE METHODS #
@@ -472,8 +474,8 @@ sub new {
     $opts{'_login_method'} = $resolve_login_method->(\%opts);
 
     # check permissions on base files if we got here
-    $check_local_perms->( "$home/.ssh",        0700, 1 ) if -e "$home/.ssh";
-    $check_local_perms->( "$home/.ssh/config", 0600 )    if -e "$home/.ssh/config";
+    $check_local_perms->( "$opts{'home'}/.ssh",        0700, 1 ) if -e "$opts{'home'}/.ssh";
+    $check_local_perms->( "$opts{'home'}/.ssh/config", 0600 )    if -e "$opts{'home'}/.ssh/config";
 
     # Make the connection
     my $self = $cache{$opts{'_cache_index'}} = $init_ssh->( $class, \%opts );
@@ -500,8 +502,8 @@ the parent's destructor kicks in:
 
 =cut
 
-my $disable_destructor = 0;
 sub DESTROY {
+    my ($self) = @_;
     return if $$ != $self->{'ppid'} || $disable_destructor;
 	$ENV{SSH_AUTH_SOCK} = $self->{'_opts'}{'_restore_auth_sock'} if $self->{'_opts'}{'_restore_auth_sock'};
     $self->{'persistent_shell'}->close() if $self->{'persistent_shell'};
@@ -571,9 +573,9 @@ sub cmd {
 	my @cmd = @_;
 
     $die_no_trace->( 'No command specified', 'PEBCAK' ) if !@cmd;
-    $diag("[DEBUG][$self->{'_opts'}{'host'}] EXEC " . join( " ", @cmd ) ) if $self->{'_opts'}{'debug'};
+    $self->diag("[DEBUG][$self->{'_opts'}{'host'}] EXEC " . join( " ", @cmd ) ) if $self->{'_opts'}{'debug'};
 
-    my $ret = $no_persist ? $send->( $self, undef, @cmd ) : $self->_do_persistent_command( \@cmd, $opts->{'no_stderr'} );
+    my $ret = $opts->{'no_persist'} ? $send->( $self, undef, @cmd ) : $self->_do_persistent_command( \@cmd, $opts->{'no_stderr'} );
     chomp( my $out = $self->read );
     my $err = $self->error;
 
@@ -592,6 +594,8 @@ George S. Baugh <george@troglodyne.net>
 cPanel, L.L.C. - in particularly the QA department (which the authors once were in).
 Many of the ideas for this module originated out of lessons learned from our time
 writing a ssh based remote teststuite for testing cPanel & WHM.
+
+Chris Eades - For the original module this evolved from at cPanel over the years.
 
 bdraco (Nick Koston) - For optimization ideas and the general process needed for expect & persistent shell.
 
