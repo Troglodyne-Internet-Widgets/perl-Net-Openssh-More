@@ -8,7 +8,7 @@ use parent 'Net::OpenSSH';
 use Data::UUID        ();
 use File::HomeDir     ();
 use File::Temp        ();
-use Fnctl             ();
+use Fcntl             ();
 use IO::Socket::INET  ();
 use IO::Socket::INET6 ();
 use List::Util qw{first};
