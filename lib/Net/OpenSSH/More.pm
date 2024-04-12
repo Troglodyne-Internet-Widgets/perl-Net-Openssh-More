@@ -127,7 +127,7 @@ my $resolve_login_method = sub {
     undef $chosen if $chosen eq 'key_path' && !$check_local_perms->( $opts->{'key_path'}, 0600 );
     return $chosen if $chosen;
     return 'SSH_AUTH_SOCK' if $ENV{'SSH_AUTH_SOCK'};
-    my $fallback_path = "$opts->{'home'}/.ssh/id"
+    my $fallback_path = "$opts->{'home'}/.ssh/id";
     ( $opts->{'key_path'} ) = map { "${fallback_path}_$_" } ( first { -s "${fallback_path}_$_" } qw{dsa rsa ecdsa} );
 
     $die_no_trace->('No key_path or password specified and no active SSH agent; cannot connect') if !$opts->{'key_path'};
@@ -265,7 +265,7 @@ $ping = sub {
     my ( $opts ) = @_;
 
 	my $timeout = 30;
-	my $host_info = first { $get_dns_record_from_hostname( $opts->{'host'}, $_ ) } qw{A AAAA};
+	my $host_info = first { $get_dns_record_from_hostname->( $opts->{'host'}, $_ ) } qw{A AAAA};
 	my ( $r_type ) = keys( %$host_info );
 	my %family_map = ( 'A' => 'INET', 'AAAA' => 'INET6' );
 	my $start = time;
