@@ -175,6 +175,10 @@ my $ping = sub {
     else {
 	    my $host_info = first { $get_dns_record_from_hostname->( $opts->{'host'}, $_ ) } qw{A AAAA};
 	    ( $r_type ) = keys( %$host_info );
+        if(!$host_info->{$r_type}) {
+            require Data::Dumper;
+            die "Can't determine IP type. " . Data::Dumper::Dumper($host_info);
+        }
         $ip = $host_info->{$r_type};
     }
 	my %family_map = ( 'A' => 'INET', 'AAAA' => 'INET6' );
@@ -256,7 +260,7 @@ my $init_ssh = sub {
     foreach my $attempt ( 1 .. $opts->{'retry_max'} ) {
 
 		local $@;
-        my $up = eval { $ping->($opts) };
+        my $up = $ping->($opts);
         if ( !$up ) {
             $die_no_trace->("$opts->{'host'} is down!") if $opts->{die_on_drop};
             diag( { '_opts' => $opts }, "Waiting for host to bring up sshd, attempt $attempt..." );
@@ -264,7 +268,8 @@ my $init_ssh = sub {
         }
 
 		# Now, per the POD of Net::OpenSSH, new will NEVER DIE, so just trust it.
-        $self = $class->SUPER::new( delete $opts->{'host'}, %$opts );
+        my @base_module_opts = qw{user port password passphrase key_path gateway proxy_command batch_mode ctl_dir ctl_path ssh_cmd scp_cmd rsync_cmd remote_shell timeout kill_ssh_on_timeout strict_mode async connect master_opts default_ssh_opts forward_agent forward_X11 default_stdin_fh default_stdout_fh default_stderr_fh default_stdin_file default_stdout_file default_stderr_file master_stdout_fh master_sdterr_fh master_stdout_discard master_stderr_discard expand_vars vars external_master default_encoding default_stream_encoding default_argument_encoding password_prompt login_handler master_setpgrp master_pty_force};
+        $self = $class->SUPER::new( delete $opts->{'host'}, map{ $_ => $opts->{$_} } grep { $opts->{$_} } @base_module_opts );
 		my $error = $self->error;
         next unless ref $self eq 'Net::OpenSSH::More' && !$error;
 
@@ -475,6 +480,7 @@ my $do_persistent_command = sub {
 sub new {
     my ( $class, $host, %opts ) = @_;
     $die_no_trace->( "No host given to $class.", 'PEBCAK' ) if !$host;
+    $host = '127.0.0.1' if $host eq 'localhost';
 
     # Set defaults, check if we can return early
     %opts = ( %defaults, %opts );
