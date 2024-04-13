@@ -16,10 +16,12 @@ use Net::OpenSSH::More;
 subtest "Live tests versus localhost" => sub {
     plan 'skip_all' => 'AUTHOR_TESTS not set in shell environment, skipping...' if !$ENV{'AUTHOR_TESTS'};
     local %Net::OpenSSH::More::cache;
-    my $obj = Net::OpenSSH::More->new( '127.0.0.1' );
+    my $obj = Net::OpenSSH::More->new( 'host' => '127.0.0.1' );
     is( ref $obj, 'Net::OpenSSH::More', "Got right ref type for object upon instantiation (using IP)" );
-    $obj = Net::OpenSSH::More->new( 'localhost' );
+    $obj = Net::OpenSSH::More->new( 'host' => 'localhost', 'debug' => 1, 'output_prefix' => '# ' );
     is( ref $obj, 'Net::OpenSSH::More', "Got right ref type for object upon instantiation (using localhost)" );
+    my @cmd_ret = $obj->cmd( { 'no_persist' => 1 }, 'echo "whee"' );
+    is( \@cmd_ret, [ "whee", '', 0 ], "Got expected return (non-persistent shell)" );
 };
 
 # Mock based testing
@@ -35,8 +37,7 @@ subtest "Common tests using mocks" => sub {
         no warnings qw{redefine};
         *Net::OpenSSH::DESTROY = sub { undef };
     }
-    local $Net::OpenSSH::More::disable_destructor = 1;
-    my $obj = Net::OpenSSH::More->new( '127.0.0.1', retry_max => 1, 'output_prefix' => '# ' );
+    my $obj = Net::OpenSSH::More->new( 'host' => '127.0.0.1', retry_max => 1, 'output_prefix' => '# ' );
     is( ref $obj, 'Net::OpenSSH::More', "Got right ref type for object upon instantiation" );
     is( $obj->diag("Whee"), undef, "You should see whee before this subtest" );
 };

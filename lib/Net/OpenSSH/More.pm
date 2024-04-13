@@ -6,11 +6,14 @@ use warnings;
 use parent 'Net::OpenSSH';
 
 use Data::UUID         ();
+use Expect             ();
 use File::HomeDir      ();
 use File::Temp         ();
 use Fcntl              ();
+use IO::Pty            ();
 use IO::Socket::INET   ();
 use IO::Socket::INET6  ();
+use IO::Stty           ();
 use List::Util qw{first};
 use Net::DNS::Resolver ();
 use Net::IP            ();
@@ -268,8 +271,8 @@ my $init_ssh = sub {
         }
 
 		# Now, per the POD of Net::OpenSSH, new will NEVER DIE, so just trust it.
-        my @base_module_opts = qw{user port password passphrase key_path gateway proxy_command batch_mode ctl_dir ctl_path ssh_cmd scp_cmd rsync_cmd remote_shell timeout kill_ssh_on_timeout strict_mode async connect master_opts default_ssh_opts forward_agent forward_X11 default_stdin_fh default_stdout_fh default_stderr_fh default_stdin_file default_stdout_file default_stderr_file master_stdout_fh master_sdterr_fh master_stdout_discard master_stderr_discard expand_vars vars external_master default_encoding default_stream_encoding default_argument_encoding password_prompt login_handler master_setpgrp master_pty_force};
-        $self = $class->SUPER::new( delete $opts->{'host'}, map{ $_ => $opts->{$_} } grep { $opts->{$_} } @base_module_opts );
+        my @base_module_opts = qw{host user port password passphrase key_path gateway proxy_command batch_mode ctl_dir ctl_path ssh_cmd scp_cmd rsync_cmd remote_shell timeout kill_ssh_on_timeout strict_mode async connect master_opts default_ssh_opts forward_agent forward_X11 default_stdin_fh default_stdout_fh default_stderr_fh default_stdin_file default_stdout_file default_stderr_file master_stdout_fh master_sdterr_fh master_stdout_discard master_stderr_discard expand_vars vars external_master default_encoding default_stream_encoding default_argument_encoding password_prompt login_handler master_setpgrp master_pty_force};
+        $self = $class->SUPER::new( map{ $_ => $opts->{$_} } grep { $opts->{$_} } @base_module_opts );
 		my $error = $self->error;
         next unless ref $self eq 'Net::OpenSSH::More' && !$error;
 
@@ -317,25 +320,25 @@ my $connection_check = sub {
 };
 
 # Try calling the function.
-# If it fails, then call _connection_check to reconnect if needed.
+# If it fails, then call $connection_check to reconnect if needed.
 #
-# The goal is to avoid calling _connection_check
+# The goal is to avoid calling $connection_check
 # unless something goes wrong since it adds about
 # 450ms to each ssh command.
 #
 # If the control socket has gone away, call
-# _connection_check ahead of time to reconnect it.
+# $connection_check ahead of time to reconnect it.
 my $call_ssh_reinit_if_check_fails = sub {
     my ( $self, $func, @args ) = @_;
 
-    $self->_connection_check() if !-S $self->{'_ctl_path'};
+    $connection_check->($self) if !-S $self->{'_ctl_path'};
 
     local $@;
     my @ret       = eval { $self->$func(@args) };
     my $ssh_error = $@ || $self->error;
     return @ret if !$ssh_error;
 
-    $self->_connection_check();
+    $connection_check->($self);
     return ($self->$func(@args));
 };
 
@@ -435,7 +438,7 @@ my $do_persistent_command = sub {
     #local $ENV{'TERM'} = 'dumb';
 
     if ( !$self->{'persistent_shell'} ) {
-        my ( $pty, $pid ) = $self->_call_ssh_reinit_if_check_fails( 'open2pty', 'bash' );
+        my ( $pty, $pid ) = $call_ssh_reinit_if_check_fails->( $self, 'open2pty', 'bash' );
 
         #XXX this all seems to be waving a dead chicken, but SSHControl and Cpanel::Expect do it, so...
         $pty->set_raw();
@@ -478,13 +481,13 @@ my $do_persistent_command = sub {
 #######################
 
 sub new {
-    my ( $class, $host, %opts ) = @_;
-    $die_no_trace->( "No host given to $class.", 'PEBCAK' ) if !$host;
-    $host = '127.0.0.1' if $host eq 'localhost';
+    my ( $class, %opts ) = @_;
+    $die_no_trace->( "No host given to $class.", 'PEBCAK' ) if !$opts{'host'};
+    $opts{'host'} = '127.0.0.1' if $opts{'host'} eq 'localhost';
 
     # Set defaults, check if we can return early
     %opts = ( %defaults, %opts );
-	$opts{'_cache_index'} = "$opts{'user'}_${host}_$opts{'port'}";
+	$opts{'_cache_index'} = "$opts{'user'}_$opts{'host'}_$opts{'port'}";
     return $cache{$opts{'_cache_index'}} unless $opts{'no_cache'} || !$cache{$opts{'_cache_index'}};
 
 	# Figure out how we're gonna login
@@ -495,7 +498,6 @@ sub new {
     $check_local_perms->( "$opts{'home'}/.ssh/config", 0600 )    if -e "$opts{'home'}/.ssh/config";
 
     # Make the connection
-    $opts{'host'} = $host;
     my $self = $cache{$opts{'_cache_index'}} = $init_ssh->( $class, \%opts );
 
     # Stash the originating pid, as running the destructor when
@@ -522,7 +524,7 @@ the parent's destructor kicks in:
 
 sub DESTROY {
     my ($self) = @_;
-    return if !$self->{'ppid'} || $$ != $self->{'ppid'} || $disable_destructor;
+    return if $$ != $self->{'ppid'} || $disable_destructor;
 	$ENV{SSH_AUTH_SOCK} = $self->{'_opts'}{'_restore_auth_sock'} if $self->{'_opts'}{'_restore_auth_sock'};
     $self->{'persistent_shell'}->close() if $self->{'persistent_shell'};
 
@@ -593,9 +595,9 @@ sub cmd {
     $die_no_trace->( 'No command specified', 'PEBCAK' ) if !@cmd;
     $self->diag("[DEBUG][$self->{'_opts'}{'host'}] EXEC " . join( " ", @cmd ) ) if $self->{'_opts'}{'debug'};
 
-    my $ret = $opts->{'no_persist'} ? $send->( $self, undef, @cmd ) : $self->_do_persistent_command( \@cmd, $opts->{'no_stderr'} );
-    chomp( my $out = $self->read );
-    my $err = $self->error;
+    my $ret = $opts->{'no_persist'} ? $send->( $self, undef, @cmd ) : $do_persistent_command->( $self, \@cmd, $opts->{'no_stderr'} );
+    chomp( my $out = $self->{'_out'} );
+    my $err = $self->error || '';
 
     $self->{'last_exit_code'} = $ret;
     return ( $out, $err, $ret );
