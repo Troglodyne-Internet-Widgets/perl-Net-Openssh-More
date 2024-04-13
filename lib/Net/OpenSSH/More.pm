@@ -109,7 +109,7 @@ my %defaults = (
 	'retry_max'               => 10,
 );
 
-my %cache;
+our %cache;
 our $disable_destructor = 0;
 
 ###################

@@ -15,6 +15,7 @@ use Net::OpenSSH::More;
 
 subtest "Live tests versus localhost" => sub {
     plan 'skip_all' => 'AUTHOR_TESTS not set in shell environment, skipping...' if !$ENV{'AUTHOR_TESTS'};
+    local %Net::OpenSSH::More::cache;
     my $obj = Net::OpenSSH::More->new( '127.0.0.1' );
     is( ref $obj, 'Net::OpenSSH::More', "Got right ref type for object upon instantiation (using IP)" );
     $obj = Net::OpenSSH::More->new( 'localhost' );
@@ -23,15 +24,21 @@ subtest "Live tests versus localhost" => sub {
 
 # Mock based testing
 subtest "Common tests using mocks" => sub {
+    local %Net::OpenSSH::More::cache;
     my $parent_mock = Test::MockModule->new('Net::OpenSSH');
     $parent_mock->redefine(
         'new'          => sub { bless {}, $_[0] },
         'check_master' => 1,
-        'DESTROY'      => undef,
     );
+    {
+        # MockModule can't actually redefine destructors properly due to the mock also going out of scope.
+        no warnings qw{redefine};
+        *Net::OpenSSH::DESTROY = sub { undef };
+    }
     local $Net::OpenSSH::More::disable_destructor = 1;
-    my $obj = Net::OpenSSH::More->new( '127.0.0.1', retry_max => 1 );
+    my $obj = Net::OpenSSH::More->new( '127.0.0.1', retry_max => 1, 'output_prefix' => '# ' );
     is( ref $obj, 'Net::OpenSSH::More', "Got right ref type for object upon instantiation" );
+    is( $obj->diag("Whee"), undef, "You should see whee before this subtest" );
 };
 
 done_testing();
