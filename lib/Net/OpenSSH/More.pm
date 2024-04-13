@@ -128,8 +128,8 @@ my $check_local_perms = sub {
     $die_no_trace->(qq{"$path" must be a file that exists})      unless $is_dir ^ -f _;
     $die_no_trace->(qq{"$path" could not be read})               unless -r _;
 
-    my $actual_mode = $stat[2];
-    $die_no_trace->(qq{Permissions on "$path" are not correct: got=$actual_mode, expected=$expected_mode}) unless $expected_mode eq $actual_mode;
+    my $actual_mode = $stat[2] & 07777;
+    $die_no_trace->(sprintf(qq{Permissions on "$path" are not correct: got=0%o, expected=0%o}, $actual_mode, $expected_mode)) unless $expected_mode eq $actual_mode;
     return 1;
 };
 
@@ -137,6 +137,7 @@ my $resolve_login_method = sub {
     my ( $opts ) = @_;
 
     my $chosen = first { $opts->{$_} } qw{key_path password};
+    $chosen //= '';
     undef $chosen if $chosen eq 'key_path' && !$check_local_perms->( $opts->{'key_path'}, 0600 );
     return $chosen if $chosen;
     return 'SSH_AUTH_SOCK' if $ENV{'SSH_AUTH_SOCK'};
@@ -462,12 +463,12 @@ my $do_persistent_command = sub {
 #######################
 
 sub new {
-    my ( $class, %opts ) = @_;
-    $die_no_trace->( "No host given to $class.", 'PEBCAK' ) if !$opts{'host'};
+    my ( $class, $host, %opts ) = @_;
+    $die_no_trace->( "No host given to $class.", 'PEBCAK' ) if !$host;
 
     # Set defaults, check if we can return early
     %opts = ( %defaults, %opts );
-	$opts{'_cache_index'} = "$opts{'user'}_$opts{'host'}_$opts{'port'}";
+	$opts{'_cache_index'} = "$opts{'user'}_${host}_$opts{'port'}";
     return $cache{$opts{'_cache_index'}} unless $opts{'no_cache'} || !$cache{$opts{'_cache_index'}};
 
 	# Figure out how we're gonna login
@@ -486,6 +487,7 @@ sub new {
 
     # Stash opts for later
     $self->{'_opts'} = \%opts;
+    $self->{'_opts'}{'host'} = $host;
 
     # Establish persistent shell, etc.
     $post_connect->( $self, \%opts );
