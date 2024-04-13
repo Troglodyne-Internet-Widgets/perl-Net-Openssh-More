@@ -314,8 +314,9 @@ my $init_ssh = sub {
 
 my $connection_check = sub {
     my ( $self ) = @_;
+    return 1 if $self->check_master;
 	local $@;
-    eval { $self = $init_ssh->($self->{'_opts'}) unless $self->check_master; };
+    eval { $self = $init_ssh->( __PACKAGE__, $self->{'_opts'}) };
     return $@ ? 0 : 1;
 };
 
@@ -482,8 +483,7 @@ my $do_persistent_command = sub {
 
 sub new {
     my ( $class, %opts ) = @_;
-    $die_no_trace->( "No host given to $class.", 'PEBCAK' ) if !$opts{'host'};
-    $opts{'host'} = '127.0.0.1' if $opts{'host'} eq 'localhost';
+    $opts{'host'} = '127.0.0.1' if !$opts{'host'} || $opts{'host'} eq 'localhost';
 
     # Set defaults, check if we can return early
     %opts = ( %defaults, %opts );
