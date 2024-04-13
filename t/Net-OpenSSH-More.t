@@ -29,10 +29,9 @@ subtest "Common tests using mocks" => sub {
         'check_master' => 1,
         'DESTROY'      => undef,
     );
-    $Net::OpenSSH::More::disable_destructor = 1;
+    local $Net::OpenSSH::More::disable_destructor = 1;
     my $obj = Net::OpenSSH::More->new( '127.0.0.1', retry_max => 1 );
     is( ref $obj, 'Net::OpenSSH::More', "Got right ref type for object upon instantiation" );
 };
 
-$Net::OpenSSH::More::disable_destructor = 0;
 done_testing();
