@@ -5,14 +5,16 @@ use warnings;
 
 use parent 'Net::OpenSSH';
 
-use Data::UUID        ();
-use File::HomeDir     ();
-use File::Temp        ();
-use Fcntl             ();
-use IO::Socket::INET  ();
-use IO::Socket::INET6 ();
+use Data::UUID         ();
+use File::HomeDir      ();
+use File::Temp         ();
+use Fcntl              ();
+use IO::Socket::INET   ();
+use IO::Socket::INET6  ();
 use List::Util qw{first};
-use Time::HiRes       ();
+use Net::DNS::Resolver ();
+use Net::IP            ();
+use Time::HiRes        ();
 
 =head1 NAME
 
@@ -123,6 +125,7 @@ my $die_no_trace = sub {
 
 my $check_local_perms = sub {
     my ( $path, $expected_mode, $is_dir ) = @_;
+    $is_dir //= 0;
     my @stat = stat($path);
     $die_no_trace->(qq{"$path" must be a directory that exists}) unless !$is_dir ^ -d _;
     $die_no_trace->(qq{"$path" must be a file that exists})      unless $is_dir ^ -f _;
@@ -164,18 +167,27 @@ my $ping = sub {
     my ( $opts ) = @_;
 
 	my $timeout = 30;
-	my $host_info = first { $get_dns_record_from_hostname->( $opts->{'host'}, $_ ) } qw{A AAAA};
-	my ( $r_type ) = keys( %$host_info );
+    my ( $host_info, $ip, $r_type );
+    if( my $ip_obj = Net::IP->new($opts->{'host'}) ) {
+        $r_type = $ip_obj->ip_is_ipv4 ? 'A' : 'AAAA';
+        $ip = $opts->{'host'};
+    }
+    else {
+	    my $host_info = first { $get_dns_record_from_hostname->( $opts->{'host'}, $_ ) } qw{A AAAA};
+	    ( $r_type ) = keys( %$host_info );
+        $ip = $host_info->{$r_type};
+    }
 	my %family_map = ( 'A' => 'INET', 'AAAA' => 'INET6' );
 	my $start = time;
+
 	while ( ( time - $start ) <= $timeout ) {
 		return 1 if "IO::Socket::$family_map{$r_type}"->new(
-			'PeerAddr' => $host_info->{$r_type},
+			'PeerAddr' => $ip,
 			'PeerPort' => $opts->{'port'},
 			'Proto'    => 'tcp',
 			'Timeout'  => $timeout,
 		);
-		diag( { '_opts' => $opts }, "[DEBUG] Waiting for response on $host_info->{$r_type}:$opts->{'port'} ($r_type)..." ) if $opts->{'debug'};
+		diag( { '_opts' => $opts }, "[DEBUG] Waiting for response on $ip:$opts->{'port'} ($r_type)..." ) if $opts->{'debug'};
 		select undef, undef, undef, 0.5;    # there's no need to try more than 2 times per second
 	}
     return 0;
@@ -262,21 +274,19 @@ my $init_ssh = sub {
             $error .= " " . readline($temp_fh);
         }
 
-        $die_no_trace->("Bad password passed, will not retry SSH connection: $error.") if ( $error =~ m{bad password}                       && $opts->{'password'} );
-        $die_no_trace->("Bad key, will not retry SSH connection: $error.")             if ( $error =~ m{master process exited unexpectedly} && $opts->{'key_path'} );
-        $die_no_trace->("Bad credentials, will not retry SSH connection: $error.")     if ( $error =~ m{Permission denied} );
+        if($error) {
+            $die_no_trace->("Bad password passed, will not retry SSH connection: $error.") if ( $error =~ m{bad password}                       && $opts->{'password'} );
+            $die_no_trace->("Bad key, will not retry SSH connection: $error.")             if ( $error =~ m{master process exited unexpectedly} && $opts->{'key_path'} );
+            $die_no_trace->("Bad credentials, will not retry SSH connection: $error.")     if ( $error =~ m{Permission denied} );
+        }
 
         if ( defined $self->error && $self->error ne "0" && $attempt == 1 ) {
             $self->diag( "SSH Connection could not be established to " . $self->{'host'} . " with the error:", $error, 'Will Retry 10 times.' );
         }
-		undef $@; # Clear any errors. XXX Do I really need to eval check_master?
-        if ( $status = eval { $self->check_master() } ) {
+        if ( $status = $self->check_master() ) {
             $self->diag("Successfully established connection to " . $self->{'host'} . " on attempt #$attempt.") if $attempt gt 1;
             last;
         }
-		elsif( $@ ) {
-			$self->diag("Failed to establish connection to " . $opts->{'host'} . " on attempt #$attempt: $@");
-		}
 
         sleep $opts->{'retry_interval'};
     }
@@ -479,6 +489,7 @@ sub new {
     $check_local_perms->( "$opts{'home'}/.ssh/config", 0600 )    if -e "$opts{'home'}/.ssh/config";
 
     # Make the connection
+    $opts{'host'} = $host;
     my $self = $cache{$opts{'_cache_index'}} = $init_ssh->( $class, \%opts );
 
     # Stash the originating pid, as running the destructor when
@@ -487,7 +498,6 @@ sub new {
 
     # Stash opts for later
     $self->{'_opts'} = \%opts;
-    $self->{'_opts'}{'host'} = $host;
 
     # Establish persistent shell, etc.
     $post_connect->( $self, \%opts );
@@ -506,7 +516,7 @@ the parent's destructor kicks in:
 
 sub DESTROY {
     my ($self) = @_;
-    return if $$ != $self->{'ppid'} || $disable_destructor;
+    return if !$self->{'ppid'} || $$ != $self->{'ppid'} || $disable_destructor;
 	$ENV{SSH_AUTH_SOCK} = $self->{'_opts'}{'_restore_auth_sock'} if $self->{'_opts'}{'_restore_auth_sock'};
     $self->{'persistent_shell'}->close() if $self->{'persistent_shell'};
 

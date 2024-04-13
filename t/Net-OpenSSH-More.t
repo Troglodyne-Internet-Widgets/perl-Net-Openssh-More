@@ -16,10 +16,12 @@ use Net::OpenSSH::More;
 subtest "Common tests using mocks" => sub {
     my $parent_mock = Test::MockModule->new('Net::OpenSSH');
     $parent_mock->redefine(
-        'new'     => sub { bless {}, $_[0] },
-        'DESTROY' => undef,
+        'new'          => sub { bless {}, $_[0] },
+        'check_master' => 1,
+        'DESTROY'      => undef,
     );
-    my $obj = Net::OpenSSH::More->new( 'localhost' );
+    $Net::OpenSSH::More::disable_destructor = 1;
+    my $obj = Net::OpenSSH::More->new( '127.0.0.1', retry_max => 1 );
     is( ref $obj, 'Net::OpenSSH::More', "Got right ref type for object upon instantiation" );
 };
 
