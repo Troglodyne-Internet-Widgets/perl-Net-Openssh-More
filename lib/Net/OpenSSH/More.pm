@@ -337,6 +337,7 @@ my $call_ssh_reinit_if_check_fails = sub {
     local $@;
     my @ret       = eval { $self->$func(@args) };
     my $ssh_error = $@ || $self->error;
+    $self->diag("[WARN] $ssh_error") if $ssh_error;
     return @ret if !$ssh_error;
 
     $connection_check->($self);
@@ -440,6 +441,7 @@ my $do_persistent_command = sub {
 
     if ( !$self->{'persistent_shell'} ) {
         my ( $pty, $pid ) = $call_ssh_reinit_if_check_fails->( $self, 'open2pty', 'bash' );
+        die "Got no pty back from open2pty: " . $self->error if !$pty;
 
         #XXX this all seems to be waving a dead chicken, but SSHControl and Cpanel::Expect do it, so...
         $pty->set_raw();
