@@ -6,7 +6,6 @@ use Test2::Tools::Explain;
 use Test2::Tools::Subtest qw{subtest_streamed};
 use Test2::Plugin::NoWarnings;
 use Test::MockModule qw{strict};
-use Carp::Always;
 
 use FindBin;
 
@@ -17,16 +16,17 @@ use Net::OpenSSH::More;
 subtest_streamed "Live tests versus localhost" => sub {
     plan 'skip_all' => 'AUTHOR_TESTS not set in shell environment, skipping...' if !$ENV{'AUTHOR_TESTS'};
     local %Net::OpenSSH::More::cache;
-    my $obj = Net::OpenSSH::More->new( 'host' => '127.0.0.1' );
+    my $obj = Net::OpenSSH::More->new( 'host' => '127.0.0.1', 'no_cache' => 1 );
     is( ref $obj, 'Net::OpenSSH::More', "Got right ref type for object upon instantiation (using IP)" );
-    undef $obj;
-    %Net::OpenSSH::More::cache = ();
-    $obj = Net::OpenSSH::More->new( 'host' => 'localhost', 'output_prefix' => '# ' );
+    $obj = Net::OpenSSH::More->new(
+        'host' => 'localhost', 'output_prefix' => '# ', 'use_persistent_shell' => 0, 'expect_timeout' => 1,
+    );
     is( ref $obj, 'Net::OpenSSH::More', "Got right ref type for object upon instantiation (using localhost)" );
-    my @cmd_ret = $obj->cmd( { 'no_persist' => 1 }, 'echo "whee"' );
+    my @cmd_ret = $obj->cmd( qw{echo whee} );
     is( \@cmd_ret, [ "whee", '', 0 ], "Got expected return (non-persistent shell)" );
-    @cmd_ret = $obj->cmd( '/bin/true' );
-    is( \@cmd_ret, [ '', '', 0 ], "Got expected return (persistent shell)" );
+    $obj->use_persistent_shell(1);
+    @cmd_ret = $obj->cmd( qw{echo widdly} );
+    is( \@cmd_ret, [ 'widdly', '', 0 ], "Got expected return (persistent shell)" );
 };
 
 # Mock based testing

@@ -18,6 +18,7 @@ use List::Util qw{first};
 use Net::DNS::Resolver ();
 use Net::IP            ();
 use Time::HiRes        ();
+use Term::ANSIColor    ();
 
 =head1 NAME
 
@@ -52,53 +53,6 @@ Highlights:
 
 Net::OpenSSH
 Net::OpenSSH::More::Linux
-
-=head1 METHODS
-
-=head2 new
-
-Instantiate the object, establish the connection. Note here that I'm not allowing
-a connection string like the parent module, and instead exploding these out into
-opts to pass to the constructor. This is because we want to index certain things
-under the hood by user, etc. and I *do not* want to use a regexp to pick out
-your username, host, port, etc. when this problem is solved much more easily
-by forcing that separation on the caller's end.
-
-ACCEPTS:
-* %opts - <HASH> A hash of key value pairs corresponding to the what you would normally pass in to Net::OpenSSH,
-  along with the following keys:
-  * use_persistent_shell - Whether or not to setup Expect to watch a persistent TTY. Less stable, but faster.
-  * no_agent - Pass in a truthy value to disable the SSH agent. By default the agent is enabled.
-  * die_on_drop - If, for some reason, the connection drops, just die instead of attempting reconnection.
-  * output_prefix - If given, is what we will tack onto the beginning of any output via diag method.
-    useful for streaming output to say, a TAP consumer (test) via passing in '# ' as prefix.
-  * debug - Pass in a truthy value to enable certain diag statements I've added in the module and pass -v to ssh.
-  * home - STRING corresponding to an absolute path to something that "looks like" a homedir. Defaults to the user's homedir.
-    useful in cases where you say, want to load SSH keys from a different path without changing assumptions about where
-    keys exist in a homedir on your average OpenSSH using system.
-  * no_cache - Pass in a truthy value to disable caching the connection and object, indexed by host string.
-    useful if for some reason you need many separate connections to test something. Make sure your MAX_SESSIONS is set sanely
-    in sshd_config if you use this extensively.
-  * retry_interval - In the case that sshd is not up on the remote host, how long to wait while before reattempting connection.
-    defaults to 6s. We retry $RETRY_MAX times, so this means waiting a little over a minute for SSH to come up by default.
-	If your situation requires longer intervals, pass in something longer.
-  * retry_max - Number of times to retry when a connection fails. Defaults to 10.
-
-RETURNS a Net::OpenSSH::More object.
-
-=head3 A note on Authentication order
-
-We attempt to authenticate using the following details, and in this order:
-1) Use supplied key_path.
-2) Use supplied password.
-3) Use existing SSH agent (SSH_AUTH_SOCK environment variable)
-4) Use keys that may exist in $HOME/.ssh - id_rsa, id_dsa and id_ecdsa (in that order).
-
-If all methods therein fail, we will die, as nothing will likely work at that point.
-It is important to be aware of this if your remove host has something like fail2ban or cPHulkd
-enabled which monitors and blocks access based on failed login attempts. If this is you,
-ensure that you have not configured things in a way as to accidentally lock yourself out
-of the remote host just because you fatfingered a connection detail in the constructor.
 
 =cut
 
@@ -221,6 +175,7 @@ my $init_ssh = sub {
 	# Leave no trace!
 	$opts->{'_tmp_obj'} = File::Temp->newdir() if !$opts->{'_tmp_obj'};
     my $tmp_dir = $opts->{'_tmp_obj'}->dirname();
+    diag( { '_opts' => $opts }, "Temp dir: $tmp_dir" ) if $opts->{'debug'};
     my $temp_fh;
 
     # Use an existing connection if possible, otherwise make one
@@ -276,7 +231,7 @@ my $init_ssh = sub {
 		my $error = $self->error;
         next unless ref $self eq 'Net::OpenSSH::More' && !$error;
 
-        if ( -s $temp_fh ) {
+        if ( $temp_fh && -s $temp_fh ) {
             seek( $temp_fh, 0, Fcntl::SEEK_SET );
             local $/;
             $error .= " " . readline($temp_fh);
@@ -316,6 +271,7 @@ my $connection_check = sub {
     my ( $self ) = @_;
     return 1 if $self->check_master;
 	local $@;
+    local $disable_destructor = 1;
     eval { $self = $init_ssh->( __PACKAGE__, $self->{'_opts'}) };
     return $@ ? 0 : 1;
 };
@@ -337,7 +293,7 @@ my $call_ssh_reinit_if_check_fails = sub {
     local $@;
     my @ret       = eval { $self->$func(@args) };
     my $ssh_error = $@ || $self->error;
-    $self->diag("[WARN] $ssh_error") if $ssh_error;
+    warn "[WARN] $ssh_error" if $ssh_error;
     return @ret if !$ssh_error;
 
     $connection_check->($self);
@@ -362,8 +318,11 @@ my $trim = sub {
 };
 
 my $send = sub {
-    my ( $self, $line_reader, @cmd ) = @_;
-    my ( $pty, $err, $pid ) = $call_ssh_reinit_if_check_fails->( $self, 'open3pty', @cmd );
+    my ( $self, $line_reader, @command ) = @_;
+
+    $self->diag("[DEBUG][$self->{'_opts'}{'host'}] EXEC " . join( " ", @command ) ) if $self->{'_opts'}{'debug'};
+
+    my ( $pty, $err, $pid ) = $call_ssh_reinit_if_check_fails->( $self, 'open3pty', @command );
     $die_no_trace->("Net::OpenSSH::open3pty failed: $err") if( !defined $pid || $self->error() );
 
     $self->{'_out'} = "";
@@ -385,45 +344,47 @@ my $send = sub {
     $line_reader->( $self, $out, '_err' ) while $out = $err->getline;
     $err->close;
 
-    $self->{'_pid'} = $pid;
     waitpid( $pid, 0 );
     return $? >> 8;
 };
 
-my $TERMINATOR = "\r\r";
+my $TERMINATOR = "\r\n";
 my $send_persistent_cmd = sub {
-    my ( $self, $cmd, $uuid ) = @_;
+    my ( $self, $command, $uuid ) = @_;
 
     $uuid //= Data::UUID->new()->create_str();
+    $command = join( ' ', @$command );
+    my $actual_cmd = "UUID='$uuid'; echo \"BEGIN \$UUID\"; $command; echo \"___\$?___\"; echo; echo \"EOF \$UUID\"";
+    $self->diag("[DEBUG][$self->{'_opts'}{'host'}] EXEC $actual_cmd" ) if $self->{'_opts'}{'debug'};
 
     #Use command on bash to ignore stuff like aliases so that we have a minimum level of PEBKAC errors due to aliasing cp to cp -i, etc.
-    $self->{'expect'}->print("UUID='$uuid'; echo \"BEGIN \$UUID\"; command $cmd ; echo \"___\$?___\"; echo; echo \"EOF \$UUID\" $TERMINATOR");
+    $self->{'expect'}->print("${actual_cmd}${TERMINATOR}");
 
-    #Rather than take the approach of Cpanel::Expect::cmd_then_poll, it seemed more straightforward to echo unique strings before and after the command.
-    #This made getting the return code somewhat more complicated, as you can see below.  That said, Cpanel::Expect appears to not concern itself with such things.
+    # Rather than take the approach of cPanel, which commands then polls async,
+    # it is more straightforward to echo unique strings before and after the command.
+    # This made getting the return code somewhat more complicated, as you can see below.
+    # That said, it also makes you not have to worry about doing things asynchronously.
+    $self->{'expect'}->expect( $self->{'_opts'}{'expect_timeout'}, '-re', qr/BEGIN $uuid/m );
+    $self->{'expect'}->expect( $self->{'_opts'}{'expect_timeout'}, '-re', qr/EOF $uuid/m ); # If nothing is printed in timeout, give up
 
-    $self->{'expect'}->expect( 30,                        '-re', qr/BEGIN $uuid/m );
-    $self->{'expect'}->expect( $self->{'expect_timeout'}, '-re', qr/EOF $uuid/m );     #If nothing is printed in 2mins, give up
-
-    #Get the actual output, remove terminal grunk
+    # Get the actual output, remove terminal grunk
     my $message = $trim->( $self->{'expect'}->before() );
-    $message =~ s/[\r\n]{1,2}$//;                                                      #Remove 'secret newline' control chars
-    $message =~ s/\x{d}//g;                                                            #More control chars
-    $message = Term::ANSIColor::colorstrip($message);                                  #Strip colors
+    $message =~ s/[\r\n]{1,2}$//;                                                      # Remove 'secret newline' control chars
+    $message =~ s/\x{d}//g;                                                            # More control chars
+    $message = Term::ANSIColor::colorstrip($message);                                  # Strip colors
 
-    #Find the exit code
+    # Find the exit code
     my ($code) = $message =~ m/___(\d*)___$/;
     unless ( defined $code ) {
 
-        #Tell the user if they've made a boo-boo
+        # Tell the user if they've made a boo-boo
         my $possible_err = $trim->( $self->{'expect'}->before() );
         $possible_err =~ s/\s//g;
         $die_no_trace->("Runaway multi-line string detected.  Please adjust the command passed.") if $possible_err =~ m/\>/;
 
         $die_no_trace->("Could not determine exit code!
-            It timed out (went 30s without printing anything).
-            Run command outside of the persistent terminal please.
-            (pass use_persistent_shell => 0 as opt to cmd)"
+            It timed out (went $self->{'_opts'}{'expect_timeout'}s without printing anything).
+            Run command outside of the persistent terminal please."
         );
     }
     $message =~ s/___(\d*)___$//g;
@@ -431,30 +392,30 @@ my $send_persistent_cmd = sub {
     return ( $message, $code );
 };
 
-# XXX TODO ALLOW ARRAY YOU BAG BITER
 my $do_persistent_command = sub {
-    my ( $self, $cmd, $no_stderr ) = @_;
-
-    #XXX casting runes, but SSHControl & Cpanel::Expect do it...
-    #local $| = 1;
-    #local $ENV{'TERM'} = 'dumb';
+    my ( $self, $command, $no_stderr ) = @_;
 
     if ( !$self->{'persistent_shell'} ) {
-        my ( $pty, $pid ) = $call_ssh_reinit_if_check_fails->( $self, 'open2pty', 'bash' );
+        my ( $pty, $pid ) = $call_ssh_reinit_if_check_fails->( $self, 'open2pty', $self->{'_remote_shell'} );
         die "Got no pty back from open2pty: " . $self->error if !$pty;
 
-        #XXX this all seems to be waving a dead chicken, but SSHControl and Cpanel::Expect do it, so...
+        # You might think that the below settings are important.
+        # In most cases, they are not.
         $pty->set_raw();
         $pty->stty( 'raw', 'icrnl', '-echo' );
         $pty->slave->stty( 'raw', 'icrnl', '-echo' );
 
         #Hook in expect
+        $self->diag("[DEBUG][$self->{'_opts'}{'host'}] INIT expect on for PTY with pid $pid") if $self->{'_opts'}{'debug'};
         $self->{'expect'} = Expect->init($pty);
         $self->{'expect'}->restart_timeout_upon_receive(1);    #Logabandon by default
-        $self->{'expect'}->print("export PS1=''; unset HISTFILE; stty raw icrnl -echo; echo 'EOF' $TERMINATOR");
-        $self->{'expect'}->expect( 10, 'EOF' );
+
+        # XXX WARNING bashisms. That said, I'm not sure how to better do this yet portably.
+        my $expect_env_cmd = "export PS1=''; export TERM='dumb'; unset HISTFILE; export FOE='configured'; stty raw icrnl -echo; unalias -a; echo \"EOF=\$FOE\"";
+        $self->diag("[DEBUG][$self->{'_opts'}{'host'}] EXEC $expect_env_cmd") if $self->{'_opts'}{'debug'};
+        $self->{'expect'}->print("${expect_env_cmd}${TERMINATOR}");
+        $self->{'expect'}->expect( $self->{'_opts'}{'expect_timeout'}, '-re', qr/EOF=configured/ );
         $self->{'expect'}->clear_accum();
-        $self->{'expect_timeout'} //= 30;
 
         #cache
         $self->{'persistent_shell'} = $pty;
@@ -463,17 +424,17 @@ my $do_persistent_command = sub {
 
     #execute the command
     my $uuid = Data::UUID->new()->create_str();
-    $cmd .= " 2> /tmp/stderr_$uuid.out" unless $no_stderr;
-    my ( $oot, $code ) = $send_persistent_cmd->( $self, $cmd, $uuid );
+    push @$command, '2>', "/tmp/stderr_$uuid.out" unless $no_stderr;
+    my ( $oot, $code ) = $send_persistent_cmd->( $self, $command, $uuid );
     $self->{'_out'} = $oot;
 
     unless ($no_stderr) {
 
         #Grab stderr
-        ( $self->{'_err'} ) = $send_persistent_cmd->( $self, "cat /tmp/stderr_$uuid.out" );
+        ( $self->{'_err'} ) = $send_persistent_cmd->( $self, [ '/usr/bin/cat', "/tmp/stderr_$uuid.out" ] );
 
         #Clean up
-        $send_persistent_cmd->( $self, "rm -f /tmp/stderr_$uuid.out" );
+        $send_persistent_cmd->( $self, [ '/usr/bin/rm', '-f', "/tmp/stderr_$uuid.out" ] );
     }
 
     return int($code);
@@ -483,9 +444,62 @@ my $do_persistent_command = sub {
 # END PRIVATE METHODS #
 #######################
 
+=head1 METHODS
+
+=head2 new
+
+Instantiate the object, establish the connection. Note here that I'm not allowing
+a connection string like the parent module, and instead exploding these out into
+opts to pass to the constructor. This is because we want to index certain things
+under the hood by user, etc. and I *do not* want to use a regexp to pick out
+your username, host, port, etc. when this problem is solved much more easily
+by forcing that separation on the caller's end.
+
+ACCEPTS:
+* %opts - <HASH> A hash of key value pairs corresponding to the what you would normally pass in to Net::OpenSSH,
+  along with the following keys:
+  * use_persistent_shell - Whether or not to setup Expect to watch a persistent TTY. Less stable, but faster.
+  * expect_timeout - When the above is active, how long should we wait before your program prints something
+    before bailing out?
+  * no_agent - Pass in a truthy value to disable the SSH agent. By default the agent is enabled.
+  * die_on_drop - If, for some reason, the connection drops, just die instead of attempting reconnection.
+  * output_prefix - If given, is what we will tack onto the beginning of any output via diag method.
+    useful for streaming output to say, a TAP consumer (test) via passing in '# ' as prefix.
+  * debug - Pass in a truthy value to enable certain diag statements I've added in the module and pass -v to ssh.
+  * home - STRING corresponding to an absolute path to something that "looks like" a homedir. Defaults to the user's homedir.
+    useful in cases where you say, want to load SSH keys from a different path without changing assumptions about where
+    keys exist in a homedir on your average OpenSSH using system.
+  * no_cache - Pass in a truthy value to disable caching the connection and object, indexed by host string.
+    useful if for some reason you need many separate connections to test something. Make sure your MAX_SESSIONS is set sanely
+    in sshd_config if you use this extensively.
+  * retry_interval - In the case that sshd is not up on the remote host, how long to wait while before reattempting connection.
+    defaults to 6s. We retry $RETRY_MAX times, so this means waiting a little over a minute for SSH to come up by default.
+	If your situation requires longer intervals, pass in something longer.
+  * retry_max - Number of times to retry when a connection fails. Defaults to 10.
+
+RETURNS a Net::OpenSSH::More object.
+
+=head3 A note on Authentication order
+
+We attempt to authenticate using the following details, and in this order:
+1) Use supplied key_path.
+2) Use supplied password.
+3) Use existing SSH agent (SSH_AUTH_SOCK environment variable)
+4) Use keys that may exist in $HOME/.ssh - id_rsa, id_dsa and id_ecdsa (in that order).
+
+If all methods therein fail, we will die, as nothing will likely work at that point.
+It is important to be aware of this if your remove host has something like fail2ban or cPHulkd
+enabled which monitors and blocks access based on failed login attempts. If this is you,
+ensure that you have not configured things in a way as to accidentally lock yourself out
+of the remote host just because you fatfingered a connection detail in the constructor.
+
+=cut
+
 sub new {
     my ( $class, %opts ) = @_;
     $opts{'host'} = '127.0.0.1' if !$opts{'host'} || $opts{'host'} eq 'localhost';
+    $opts{'remote_shell'} ||= 'bash'; # prevent stupid defaults
+    $opts{'expect_timeout'} //= 30; # If your program goes over 30s without printing...
 
     # Set defaults, check if we can return early
     %opts = ( %defaults, %opts );
@@ -500,11 +514,8 @@ sub new {
     $check_local_perms->( "$opts{'home'}/.ssh/config", 0600 )    if -e "$opts{'home'}/.ssh/config";
 
     # Make the connection
-    my $self = $cache{$opts{'_cache_index'}} = $init_ssh->( $class, \%opts );
-
-    # Stash the originating pid, as running the destructor when
-    # you have forked past instantiation means you have a bad time
-    $self->{'ppid'} = $$;
+    my $self = $init_ssh->( $class, \%opts );
+    $cache{$opts{'_cache_index'}} = $self unless $opts{'no_cache'};
 
     # Stash opts for later
     $self->{'_opts'} = \%opts;
@@ -514,6 +525,19 @@ sub new {
 
     return $self;
 };
+
+=head2 use_persistent_shell
+
+Pass "defined but falsy/truthy" to this to enable using the persistent shell or deactivate its' use.
+Returns either the value you just set or the value it last had (if arg is not defined).
+
+=cut
+
+sub use_persistent_shell {
+    my ($self, $use_shell) = @_;
+    return $self->{'_opts'}{'use_persistent_shell'} if !defined($use_shell);
+    return $self->{'_opts'}{'use_persistent_shell'} = $use_shell;
+}
 
 =head2 DESTROY
 
@@ -526,7 +550,7 @@ the parent's destructor kicks in:
 
 sub DESTROY {
     my ($self) = @_;
-    return if $$ != $self->{'ppid'} || $disable_destructor;
+    return if !$self->{'_perl_pid'} || $$ != $self->{'_perl_pid'} || $disable_destructor;
 	$ENV{SSH_AUTH_SOCK} = $self->{'_opts'}{'_restore_auth_sock'} if $self->{'_opts'}{'_restore_auth_sock'};
     $self->{'persistent_shell'}->close() if $self->{'persistent_shell'};
 
@@ -577,7 +601,9 @@ Also, be careful with changing directory;
 this can cause unexpected side-effects in your code.
 Changing shell with chsh will also be ignored;
 the persistent shell is what you started with no matter what.
-In those cases, you should pass no_persist as a true value to fork and execute the command by itself.
+In those cases, use_persistent_shell should be called to disable that before calling this.
+Also note that persistent mode basically *requires* you to use bash.
+I am not yet aware of how to make this better yet.
 
 If the 'debug' opt to the constructor is set, every command executed hereby will be printed.
 
@@ -592,12 +618,17 @@ In no_persist mode, stderr and stdout are merged, making the $err parameter retu
 sub cmd {
     my ( $self ) = shift;
 	my $opts = ref $_[0] eq 'HASH' ? shift : {};
-	my @cmd = @_;
+	my @command = @_;
 
-    $die_no_trace->( 'No command specified', 'PEBCAK' ) if !@cmd;
-    $self->diag("[DEBUG][$self->{'_opts'}{'host'}] EXEC " . join( " ", @cmd ) ) if $self->{'_opts'}{'debug'};
+    $die_no_trace->( 'No command specified', 'PEBCAK' ) if !@command;
 
-    my $ret = $opts->{'no_persist'} ? $send->( $self, undef, @cmd ) : $do_persistent_command->( $self, \@cmd, $opts->{'no_stderr'} );
+    my $ret;
+    if( $self->{'_opts'}{'use_persistent_shell'} ) {
+         $ret = $do_persistent_command->( $self, \@command, $opts->{'no_stderr'} )
+    }
+    else {
+        $ret = $send->( $self, undef, @command );
+    }
     chomp( my $out = $self->{'_out'} );
     my $err = $self->error || '';
 
