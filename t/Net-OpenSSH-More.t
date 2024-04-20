@@ -23,10 +23,16 @@ subtest_streamed "Live tests versus localhost" => sub {
     );
     is( ref $obj, 'Net::OpenSSH::More', "Got right ref type for object upon instantiation (using localhost)" );
     my @cmd_ret = $obj->cmd(qw{echo whee});
-    is( \@cmd_ret, [ "whee", '', 0 ], "Got expected return (non-persistent shell)" );
+    my $expected = [ "whee", '', 0 ];
+    is( \@cmd_ret, $expected, "Got expected return (non-persistent shell)" );
     $obj->use_persistent_shell(1);
     @cmd_ret = $obj->cmd(qw{echo widdly});
-    is( \@cmd_ret, [ 'widdly', '', 0 ], "Got expected return (persistent shell)" );
+    is( \@cmd_ret, $expected, "Got expected return (persistent shell)" );
+    $obj->write("net-openssh-more-test", "whee");
+    @cmd_ret = $obj->cmd(qw{cat net-openssh-more-test});
+    is( \@cmd_ret, $expected, "Got expected result from write");
+    my $ec = $obj->cmd_exit_only(qw{rm -f net-openssh-more-test});
+    is( $ec, 0, "cmd_exit_only returns 0 on successful command");
 };
 
 # Mock based testing
