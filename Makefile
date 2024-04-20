@@ -5,4 +5,8 @@ FILES2CHECK := $(shell find lib/ -name '*.pm')
 compilecheck:
 	$(foreach FILE,$(FILES2CHECK),perl -Ilib -c $(FILE) &&) /bin/true
 
-.PHONY: compilecheck test
+tidy:
+	$(foreach FILE,$(FILES2CHECK),perltidy -b $(FILE) &&) /bin/true
+	perltidy -b t/*.t
+
+.PHONY: compilecheck test tidy
