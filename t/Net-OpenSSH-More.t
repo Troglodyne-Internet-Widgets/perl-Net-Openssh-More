@@ -33,6 +33,8 @@ subtest_streamed "Live tests versus localhost" => sub {
     is( \@cmd_ret, $expected, "Got expected result from write");
     my $ec = $obj->cmd_exit_code(qw{rm -f net-openssh-more-test});
     is( $ec, 0, "cmd_exit_code returns 0 on successful command");
+    my $ret = $obj->eval_full( 'code' => sub { return $_[0] ? "whee" : "widdly"; }, 'args' => [ 1 ] );
+    is( $ret, "whee", "Got expected result from eval_full" );
 };
 
 # Mock based testing
