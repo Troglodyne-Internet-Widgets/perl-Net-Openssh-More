@@ -22,10 +22,10 @@ subtest_streamed "Live tests versus localhost" => sub {
         'host' => 'localhost', 'output_prefix' => '# ', 'use_persistent_shell' => 0, 'expect_timeout' => 1,
     );
     is( ref $obj, 'Net::OpenSSH::More', "Got right ref type for object upon instantiation (using localhost)" );
-    my @cmd_ret = $obj->cmd( qw{echo whee} );
+    my @cmd_ret = $obj->cmd(qw{echo whee});
     is( \@cmd_ret, [ "whee", '', 0 ], "Got expected return (non-persistent shell)" );
     $obj->use_persistent_shell(1);
-    @cmd_ret = $obj->cmd( qw{echo widdly} );
+    @cmd_ret = $obj->cmd(qw{echo widdly});
     is( \@cmd_ret, [ 'widdly', '', 0 ], "Got expected return (persistent shell)" );
 };
 
@@ -43,8 +43,8 @@ subtest_streamed "Common tests using mocks" => sub {
         *Net::OpenSSH::DESTROY = sub { undef };
     }
     my $obj = Net::OpenSSH::More->new( 'host' => '127.0.0.1', retry_max => 1, 'output_prefix' => '# ' );
-    is( ref $obj, 'Net::OpenSSH::More', "Got right ref type for object upon instantiation" );
-    is( $obj->diag("Whee"), undef, "You should see whee before this subtest" );
+    is( ref $obj,           'Net::OpenSSH::More', "Got right ref type for object upon instantiation" );
+    is( $obj->diag("Whee"), undef,                "You should see whee before this subtest" );
 };
 
 done_testing();
