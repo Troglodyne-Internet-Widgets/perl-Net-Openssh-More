@@ -39,8 +39,6 @@ my $get_addrs_for_iface = sub {
 
 Method to retrieve the primary device interface from /proc/net/route
 
-Modified from /scripts/mainipcheck and t/lib/Test/GetPrimaryEth.pm
-
 Optionally accepts a truthy arg to indicate whether you want this for the
 local host instead of the remote host.
 
@@ -54,7 +52,7 @@ sub get_primary_adapter {
             File::Slurper::read_text('/proc/net/route');
         }
         else {
-            $self->cmd( "cat /proc/net/route", 1 );
+            $self->cmd( "cat /proc/net/route" );
         }
     };
     foreach my $line ( split( /\n/, $proc_route_path ) ) {
