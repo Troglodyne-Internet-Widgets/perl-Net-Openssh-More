@@ -22,18 +22,18 @@ subtest_streamed "Live tests versus localhost" => sub {
         'host' => 'localhost', 'output_prefix' => '# ', 'use_persistent_shell' => 0, 'expect_timeout' => 1,
     );
     is( ref $obj, 'Net::OpenSSH::More', "Got right ref type for object upon instantiation (using localhost)" );
-    my @cmd_ret = $obj->cmd(qw{echo whee});
+    my @cmd_ret  = $obj->cmd(qw{echo whee});
     my $expected = [ "whee", '', 0 ];
     is( \@cmd_ret, $expected, "Got expected return (non-persistent shell)" );
     $obj->use_persistent_shell(1);
     @cmd_ret = $obj->cmd(qw{echo whee});
     is( \@cmd_ret, $expected, "Got expected return (persistent shell)" );
-    $obj->write("net-openssh-more-test", "whee");
+    $obj->write( "net-openssh-more-test", "whee" );
     @cmd_ret = $obj->cmd(qw{cat net-openssh-more-test});
-    is( \@cmd_ret, $expected, "Got expected result from write");
+    is( \@cmd_ret, $expected, "Got expected result from write" );
     my $ec = $obj->cmd_exit_code(qw{rm -f net-openssh-more-test});
-    is( $ec, 0, "cmd_exit_code returns 0 on successful command");
-    my $ret = $obj->eval_full( 'code' => sub { return $_[0] ? "whee" : "widdly"; }, 'args' => [ 1 ] );
+    is( $ec, 0, "cmd_exit_code returns 0 on successful command" );
+    my $ret = $obj->eval_full( 'code' => sub { return $_[0] ? "whee" : "widdly"; }, 'args' => [1] );
     is( $ret, "whee", "Got expected result from eval_full" );
 };
 

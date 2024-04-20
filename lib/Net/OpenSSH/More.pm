@@ -581,7 +581,6 @@ Execute specified command via SSH. If first arg is HASHREF, then it uses that as
 Command is specifed as a LIST, as that's the easiest way to ensure escaping is done correctly.
 
 $opts HASHREF:
-C<no_persist> - Boolean - Whether or not to use persistent shell if that is enabled.
 C<no_stderr> - Boolean - Whether or not to discard STDERR.
 
 C<command> - LIST of components combined together to make a shell command.
@@ -780,10 +779,10 @@ Chris Eades - For the original module this evolved from at cPanel over the years
 
 bdraco (Nick Koston) - For optimization ideas and the general process needed for expect & persistent shell.
 
-J.D. Lightsey - For the somewhat crazy but nonetheless very useful eval_full subroutine used
+J.D. Lightsey - For the somewhat crazy looking but nonetheless very useful eval_full subroutine used
 to execute subroutine references from the orchestrating server on the remote host's perl.
 
-Brian M. Carlson - For the highly useful sftp shortcut methods that utilize Net::SFTP::Foreign.
+Brian M. Carlson - For the highly useful sftp shortcut method that caches Net::SFTP::Foreign.
 
 Rikus Goodell - For shell escaping expertise
 
