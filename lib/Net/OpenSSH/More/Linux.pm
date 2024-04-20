@@ -3,13 +3,35 @@ package Net::OpenSSH::More::Linux;
 use strict;
 use warnings;
 
-use parent 'Net::OpenSSH::More::Linux';
+use parent 'Net::OpenSSH::More';
 
 use File::Slurper ();
 
 =head1 ASSUMPTIONS
 
 This module assumes that both the local and remote machine are some variant of GNU/Linux.
+
+=cut
+
+###################
+# PRIVATE METHODS #
+###################
+
+my $get_addrs_for_iface = sub {
+    my ( $self, $interface, $proto, $use_local ) = @_;
+    $interface ||= $self->get_primary_adapter($use_local);
+    $self->diag("Attempting to get $proto address for interface $interface");
+    my $regex = $proto eq 'inet' ? '[\d\.]+' : '[\da-f:]+';    # Close enough
+
+    my $cmd     = "ip -f $proto addr show $interface scope global dynamic";
+    my $ip      = $use_local ? `$cmd` : $self->cmd($cmd);
+    my @matches = $ip =~ m/$proto\s+($regex)/g;
+    return @matches;
+};
+
+#######################
+# END PRIVATE METHODS #
+#######################
 
 =head2 METHODS
 
@@ -82,25 +104,5 @@ sub get_local_ips {
         'v6' => [ $get_addrs_for_iface->( $self, $interface, 'inet6', 1 ) ],
     );
 }
-
-###################
-# PRIVATE METHODS #
-###################
-
-my $get_addrs_for_iface = sub {
-    my ( $self, $interface, $proto, $use_local ) = @_;
-    $interface ||= $self->get_primary_adapter($use_local);
-    $self->diag("Attempting to get $proto address for interface $interface");
-    my $regex = $proto eq 'inet' ? '[\d\.]+' : '[\da-f:]+';    # Close enough
-
-    my $cmd     = "ip -f $proto addr show $interface scope global dynamic";
-    my $ip      = $use_local ? `$cmd` : $self->cmd($cmd);
-    my @matches = $ip =~ m/$proto\s+($regex)/g;
-    return @matches;
-};
-
-#######################
-# END PRIVATE METHODS #
-#######################
 
 1;
