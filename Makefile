@@ -3,4 +3,4 @@ test: compilecheck
 
 FILES2CHECK = $(shell find lib/ -name '*.pm')
 compilecheck:
-	$(foreach FILE,$(FILES2CHECK),perl -Ilib -c $(FILE);)
+	$(foreach FILE,$(FILES2CHECK),@perl -Ilib -c $(FILE);)
