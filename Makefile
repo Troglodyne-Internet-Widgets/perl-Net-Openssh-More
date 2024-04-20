@@ -1,3 +1,6 @@
+install-githooks:
+	install githooks/* .git/hooks/
+
 test: compilecheck
 	prove -mv t/*.t
 
@@ -9,4 +12,4 @@ tidy:
 	$(foreach FILE,$(FILES2CHECK),perltidy -b $(FILE) &&) /bin/true
 	perltidy -b t/*.t
 
-.PHONY: compilecheck test tidy
+.PHONY: compilecheck test tidy install-githooks
