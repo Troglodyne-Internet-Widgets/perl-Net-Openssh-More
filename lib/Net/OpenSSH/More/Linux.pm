@@ -1,9 +1,9 @@
-package Net::OpenSSH::More;
+package Net::OpenSSH::More::Linux;
 
 use strict;
 use warnings;
 
-use parent 'Net::OpenSSH::More';
+use parent 'Net::OpenSSH::More::Linux';
 
 use File::Slurper ();
 
