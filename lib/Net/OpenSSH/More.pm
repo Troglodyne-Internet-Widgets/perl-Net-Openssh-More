@@ -676,19 +676,19 @@ Returns true if all actions are successful, otherwise confess the error.
 sub write {
     my ( $self, $file, $content, $mode, $owner, $group ) = @_;
 
-    die '[PARAMETER] No file specified' if !defined $p_file;
-    die '[PARAMETER] File content not specified' if !defined $p_text;
+    die '[PARAMETER] No file specified' if !defined $file;
+    die '[PARAMETER] File content not specified' if !defined $content;
 
     my %opts;
     $opts{'perm'} = $mode if $mode;
     my $ret = $self->sftp()->put_content( $content, $file, %opts );
-    warn "[WARN] Write failed: " $self->sftp()->error() if !$ret;
+    warn "[WARN] Write failed: " . $self->sftp()->error() if !$ret;
 
     if ( defined $owner || defined $group ) {
         $owner //= $self->{'_opts'}{'user'};
         $group //= $owner;
         $ret = $self->sftp()->chown( $file, $owner, $group );
-        warn "[WARN] Couldn't chown $p_file") if $ret;
+        warn "[WARN] Couldn't chown $file" if $ret;
     }
 
     return $ret;
