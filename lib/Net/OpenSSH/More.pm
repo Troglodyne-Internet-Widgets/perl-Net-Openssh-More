@@ -636,6 +636,63 @@ sub cmd {
     return ( $out, $err, $ret );
 }
 
+=head2 cmd_exit_code
+
+Same thing as cmd but only returns the exit code.
+
+=cut
+
+sub cmd_exit_code {
+    my ($self,@args) = @_;
+    return ($self->cmd(@args))[2];
+}
+
+sub sftp {
+    my ($self) = @_;
+
+    unless ( defined $self->{'_sftp'} ) {
+        $self->{'_sftp'} = $self->SUPER::sftp();
+        die 'Unable to establish SFTP connection to remote host: ' . $self->error() unless defined $self->{'_sftp'};
+    }
+    return $self->{'_sftp'};
+}
+
+=head3 B<write (FILE,CONTENT,[MOD],[OWN])>
+
+Write a file.
+
+C<FILE> - Absolute path to file.
+C<CONTENT> - Content to write to file.
+C<MOD> - File mode.
+C<OWN> - File owner. Defaults to the user you connected as.
+C<GRP> - File group. Defaults to OWN.
+
+Returns true if all actions are successful, otherwise confess the error.
+
+    $ssh->write($filename,$content,'600','root');
+
+=cut
+
+sub write {
+    my ( $self, $file, $content, $mode, $owner, $group ) = @_;
+
+    die '[PARAMETER] No file specified' if !defined $p_file;
+    die '[PARAMETER] File content not specified' if !defined $p_text;
+
+    my %opts;
+    $opts{'perm'} = $mode if $mode;
+    my $ret = $self->sftp()->put_content( $content, $file, %opts );
+    warn "[WARN] Write failed: " $self->sftp()->error() if !$ret;
+
+    if ( defined $owner || defined $group ) {
+        $owner //= $self->{'_opts'}{'user'};
+        $group //= $owner;
+        $ret = $self->sftp()->chown( $file, $owner, $group );
+        warn "[WARN] Couldn't chown $p_file") if $ret;
+    }
+
+    return $ret;
+}
 
 =head1 AUTHORS
 
@@ -655,7 +712,7 @@ bdraco (Nick Koston) - For optimization ideas and the general process needed for
 J.D. Lightsey - For the somewhat crazy but nonetheless very useful eval_full subroutine used
 to execute subroutine references from the orchestrating server on the remote host's perl.
 
-Brian M. Carlson - For the highly useful sftp shortcut method that utilizes Net::SFTP::Foreign.
+Brian M. Carlson - For the highly useful sftp shortcut methods that utilize Net::SFTP::Foreign.
 
 Rikus Goodell - For shell escaping expertise
 
