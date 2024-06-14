@@ -36,7 +36,6 @@ Highlights:
 * Many shortcut methods for common system administration tasks
 * Registration method for commands to run upon DESTROY/before disconnect.
 * Automatic reconnection ability upon connection loss
-* Easy SFTP accessor for file uploads/downloads.
 
 =head1 SYNOPSIS
 
@@ -335,7 +334,8 @@ my $send = sub {
       }
       if ref $line_reader ne 'CODE';
 
-    # TODO make this async so you can stream STDERR as well
+    # TODO make this async so you can stream STDERR *in order*
+	# with STDOUT as well
     # That said, most only care about error if command fails, so...
     my $out;
     $line_reader->( $self, $out, '_out' ) while $out = $pty->getline;
@@ -585,6 +585,7 @@ Command is specifed as a LIST, as that's the easiest way to ensure escaping is d
 
 $opts HASHREF:
 C<no_stderr> - Boolean - Whether or not to discard STDERR.
+C<use_operistent_shell> - Boolean - Whether or not to use the persistent shell.
 
 C<command> - LIST of components combined together to make a shell command.
 
@@ -592,7 +593,7 @@ Returns LIST STDOUT, STDERR, and exit code from executed command.
 
     my ($out,$err,$ret) = $ssh->cmd(qw{ip addr show});
 
-If use_persistent_shell was truthy in the constructor,
+If use_persistent_shell was truthy in the constructor (or you override via opts HR),
 then commands are executed in a persistent Expect session to cut down on forks,
 and in general be more efficient.
 
@@ -625,7 +626,8 @@ sub cmd {
     $die_no_trace->( 'No command specified', 'PEBCAK' ) if !@command;
 
     my $ret;
-    if ( $self->{'_opts'}{'use_persistent_shell'} ) {
+	$opts->{'use_persistent_shell'} = $self->{'_opts'}{'use_persistent_shell'} if !exists $opts->{'use_persistent_shell'};
+    if ( $opts->{'use_persistent_shell'} ) {
         $ret = $do_persistent_command->( $self, \@command, $opts->{'no_stderr'} );
     }
     else {
@@ -766,6 +768,36 @@ sub eval_full {
     die $result->{error} if ( $result->{error} );
 
     return wantarray ? @{ $result->{data} } : $result->{data}[0];
+}
+
+=head3 cmd_stream
+
+Pretty much the same as running cmd() with one important caveat --
+all output is formatted with the configured prefix and *streams* to STDOUT.
+Useful for remote test harness building.
+Returns (exit_code), as in this context that should be all you care about.
+
+You may be asking, "well then why not use system?" That does not support
+the prefixing I'm doing here. Essentially we provide a custom line reader
+to 'send' which sends the output to STDOUT via 'diag' as well as doing
+the "default" behavior (append the line to the relevant output vars).
+
+NOTE: This uses send() exclusively, and will never invoke the persistent shell,
+so if you want that, don't use this.
+
+=cut
+
+sub cmd_stream {
+    my ( $self, @cmd ) = @_;
+    my $line_reader = sub {
+        my ( $self, $out, $stash_param ) = @_;
+        $out =~ s/[\r\n]{1,2}$//;
+        $self->diag($out);
+        $self->{$stash_param} .= "$out\n";
+
+        return;
+    };
+	return $send->( $self, $line_reader, @command );
 }
 
 =head1 AUTHORS

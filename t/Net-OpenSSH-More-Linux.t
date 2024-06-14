@@ -35,7 +35,7 @@ subtest_streamed "Common tests using mocks" => sub {
         'DESTROY'      => undef,
     );
     my $obj = Net::OpenSSH::More::Linux->new( 'host' => 'localhost', retry_max => 1 );
-    is( ref $obj,           'Net::OpenSSH::More::Linux', "Got right ref type for object upon instantiation" );
+    is( ref $obj, 'Net::OpenSSH::More::Linux', "Got right ref type for object upon instantiation" );
 };
 
 done_testing();

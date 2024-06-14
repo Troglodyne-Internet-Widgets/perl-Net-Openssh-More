@@ -7,9 +7,19 @@ use parent 'Net::OpenSSH::More';
 
 use File::Slurper ();
 
+=head1 NAME
+
+Net::OpenSSH::More::Linux
+
+=head1 DESCRIPTION
+
+This module contains useful methods to complement the parent's when in use on
+all linux environments.
+
 =head1 ASSUMPTIONS
 
 This module assumes that both the local and remote machine are some variant of GNU/Linux.
+Don't use this if that's not the case.
 
 =cut
 
@@ -52,7 +62,7 @@ sub get_primary_adapter {
             File::Slurper::read_text('/proc/net/route');
         }
         else {
-            $self->cmd( "cat /proc/net/route" );
+            $self->cmd("cat /proc/net/route");
         }
     };
     foreach my $line ( split( /\n/, $proc_route_path ) ) {
