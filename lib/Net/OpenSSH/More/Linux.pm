@@ -119,7 +119,8 @@ Effectively the same thing as `cp $SOURCE $DEST` on the remote server.
 
 =cut
 
-sub copy ( $self, $SOURCE, $DEST ) {
+sub copy {
+    my ( $self, $SOURCE, $DEST ) = @_;
     return $self->send("cp -a $SOURCE $DEST");
 }
 

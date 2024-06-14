@@ -553,7 +553,7 @@ Dies in this module, as this varies on different platforms (GNU/LINUX, Windows, 
 =cut
 
 sub copy {
-	die "Unimplemented, use a subclass of this perhaps?";
+    die "Unimplemented, use a subclass of this perhaps?";
 }
 
 =head2 B<backup_files (FILES)>
@@ -602,11 +602,11 @@ sub backup_files {
                 my $bkup = $file . '.' . $self->{'file_backups'}{$file};
                 if ($stash) {
                     $self->diag("[INFO] Moving '$file' to '$bkup'");
-                    $self->sftp->rename($file, $bkup);
+                    $self->sftp->rename( $file, $bkup );
                 }
                 else {
                     $self->diag("[INFO] Backing up '$file' to '$bkup'");
-                    $self->copy($file, $bkup); # XXX Probably not that portable, maybe move to Linux.pm somehow?
+                    $self->copy( $file, $bkup );    # XXX Probably not that portable, maybe move to Linux.pm somehow?
                 }
 
                 # otherwise if the file to be backed up doesn't exist
@@ -684,8 +684,8 @@ the parent's destructor kicks in:
 
 sub DESTROY {
     my ($self) = @_;
-    return                                                       if !$self->{'_perl_pid'} || $$ != $self->{'_perl_pid'} || $disable_destructor;
-	$self->restore_files();
+    return if !$self->{'_perl_pid'} || $$ != $self->{'_perl_pid'} || $disable_destructor;
+    $self->restore_files();
     $ENV{SSH_AUTH_SOCK} = $self->{'_opts'}{'_restore_auth_sock'} if $self->{'_opts'}{'_restore_auth_sock'};
     $self->{'persistent_shell'}->close()                         if $self->{'persistent_shell'};
 
