@@ -586,7 +586,7 @@ $ssh->backup_files(\@files);
 sub backup_files {
     my ( $self, $files, $stash ) = @_;
 
-    confess "[INPUT]: ARRAYREF required by backup_files()." if ( ref $files ne 'ARRAY' );
+    die "[INPUT]: ARRAYREF required by backup_files()." if ( ref $files ne 'ARRAY' );
 
     # For each file passed in
     foreach my $file (@$files) {
@@ -642,7 +642,7 @@ sub restore_files {
 
     # If no files were passed in then grab all files that have been backed up
     $files //= [ keys %{ $self->{'file_backups'} } ];
-    confess "[INPUT]: ARRAYREF required by restore_files()." if ( ref $files ne 'ARRAY' );
+    die "[INPUT]: ARRAYREF required by restore_files()." if ( ref $files ne 'ARRAY' );
 
     # foreach file
     foreach my $file (@$files) {
@@ -803,7 +803,7 @@ C<MOD> - File mode.
 C<OWN> - File owner. Defaults to the user you connected as.
 C<GRP> - File group. Defaults to OWN.
 
-Returns true if all actions are successful, otherwise confess the error.
+Returns true if all actions are successful, otherwise warn/die about the error.
 
     $ssh->write($filename,$content,'600','root');
 
