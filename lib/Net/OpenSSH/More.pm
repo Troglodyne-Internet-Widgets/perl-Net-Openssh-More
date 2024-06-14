@@ -335,7 +335,7 @@ my $send = sub {
       if ref $line_reader ne 'CODE';
 
     # TODO make this async so you can stream STDERR *in order*
-	# with STDOUT as well
+    # with STDOUT as well
     # That said, most only care about error if command fails, so...
     my $out;
     $line_reader->( $self, $out, '_out' ) while $out = $pty->getline;
@@ -626,7 +626,7 @@ sub cmd {
     $die_no_trace->( 'No command specified', 'PEBCAK' ) if !@command;
 
     my $ret;
-	$opts->{'use_persistent_shell'} = $self->{'_opts'}{'use_persistent_shell'} if !exists $opts->{'use_persistent_shell'};
+    $opts->{'use_persistent_shell'} = $self->{'_opts'}{'use_persistent_shell'} if !exists $opts->{'use_persistent_shell'};
     if ( $opts->{'use_persistent_shell'} ) {
         $ret = $do_persistent_command->( $self, \@command, $opts->{'no_stderr'} );
     }
@@ -797,7 +797,7 @@ sub cmd_stream {
 
         return;
     };
-	return $send->( $self, $line_reader, @command );
+    return $send->( $self, $line_reader, @cmd );
 }
 
 =head1 AUTHORS
