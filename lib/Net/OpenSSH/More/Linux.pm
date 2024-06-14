@@ -113,4 +113,14 @@ sub get_local_ips {
     );
 }
 
+=head2 copy
+
+Effectively the same thing as `cp $SOURCE $DEST` on the remote server.
+
+=cut
+
+sub copy ( $self, $SOURCE, $DEST ) {
+    return $self->send("cp -a $SOURCE $DEST");
+}
+
 1;

@@ -542,18 +542,150 @@ sub use_persistent_shell {
     return $self->{'_opts'}{'use_persistent_shell'} = $use_shell;
 }
 
+=head2 copy
+
+Copies $SOURCE file on the remote machine to $DEST on the remote machine.
+If you want to sync/copy files from remote to local or vice/versa, use
+the sftp accessor (Net::SFTP::Foreign) instead.
+
+Dies in this module, as this varies on different platforms (GNU/LINUX, Windows, etc.)
+
+=cut
+
+sub copy {
+	die "Unimplemented, use a subclass of this perhaps?";
+}
+
+=head2 B<backup_files (FILES)>
+
+Backs up files which you wish to later restore to their original state. If the file does
+not currently exist then the method will still store a reference for later file deletion.
+This may seem strange at first, but think of it in the context of preserving 'state' before
+a test or scripted action is run. If no file existed prior to action, the way to restore
+that state would be to delete the added file(s).
+
+NOTE: Since copying files on the remote system to another location on the remote system
+is in fact not something implemented by Net::SFTP::Foreign, this is necessarily going
+to be a "non-portable" method -- use the Linux.pm subclass of this if you want to be able
+to actually backup files without dying, or subclass your own for Windows, however they
+choose to implement `copy` with their newfangled(?) SSH daemon.
+
+C<FILES> - ARRAY_REF - File(s) to backup.
+
+C<STASH> - BOOL - mv files on backup instead of cp.  This will make sure FILES arg path no
+                  longer exists at all so a fresh FILE can be written during run.
+
+my $file = '/path/to/file.txt';
+$ssh->backup_files([$file]);
+
+my @files = ( '/path/to/file.txt', '/path/to/file2.txt' );
+$ssh->backup_files(\@files);
+
+=cut
+
+sub backup_files {
+    my ( $self, $files, $stash ) = @_;
+
+    confess "[INPUT]: ARRAYREF required by backup_files()." if ( ref $files ne 'ARRAY' );
+
+    # For each file passed in
+    foreach my $file (@$files) {
+
+        # If the file hasn't already been backed up
+        if ( !defined $self->{'file_backups'}{$file} ) {
+
+            # and the file exists
+            if ( $self->sftp->test_e($file) ) {
+
+                # then back it up
+                $self->{'file_backups'}{$file} = time;
+                my $bkup = $file . '.' . $self->{'file_backups'}{$file};
+                if ($stash) {
+                    $self->diag("[INFO] Moving '$file' to '$bkup'");
+                    $self->sftp->rename($file, $bkup);
+                }
+                else {
+                    $self->diag("[INFO] Backing up '$file' to '$bkup'");
+                    $self->copy($file, $bkup); # XXX Probably not that portable, maybe move to Linux.pm somehow?
+                }
+
+                # otherwise if the file to be backed up doesn't exist
+            }
+            else {
+                # then just note that a file may need to be deleted later
+                $self->{'file_backups'}{$file} = '';
+            }
+        }
+    }
+    return;
+}
+
+=head2 B<restore_files (FILES)>
+
+Restores specific file(s) backed up using backup_files(), or all the backup files if none
+are specified, to their previous state.
+
+If the file in question DID NOT exist when backup_files was last invoked for the file,
+then the file will instead be deleted, as that was the state of the file previous to
+actions taken in your test or script.
+
+C<FILES> - (Optional) - ARRAY_REF - File(s) to restore.
+
+my $file = '/path/to/file.txt';
+$ssh->backup_files([$file]);
+$ssh->restore_files();
+
+=cut
+
+sub restore_files {
+    my ( $self, $files ) = @_;
+
+    # If no files were passed in then grab all files that have been backed up
+    $files //= [ keys %{ $self->{'file_backups'} } ];
+    confess "[INPUT]: ARRAYREF required by restore_files()." if ( ref $files ne 'ARRAY' );
+
+    # foreach file
+    foreach my $file (@$files) {
+
+        # that has been marked as modified
+        if ( defined $self->{'file_backups'}{$file} ) {
+
+            # if a backup exists
+            if ( $self->{'file_backups'}{$file} ) {
+
+                # then restore the backup
+                my $bkup = $file . '.' . $self->{'file_backups'}{$file};
+                if ( $self->sftp->test_e($bkup) ) {
+                    $self->diag("[INFO] Restoring backup '$file' from '$bkup'");
+                    $self->sftp->rename( $bkup, $file, 'overwrite' => 1 );
+                }
+
+                # otherwise no backup exists we just need to delete the modified file
+            }
+            else {
+                $self->diag("[INFO] Deleting '$file' to restore system state (beforehand the file didn't exist)");
+                $self->sftp->remove($file);
+            }
+        }
+        delete $self->{'file_backups'}{$file};
+    }
+    return;
+}
+
 =head2 DESTROY
 
 Noted in POD only because of some behavior differences between the
 parent module and this. The following actions are taken *before*
 the parent's destructor kicks in:
 * Return early if you aren't the PID which created the object.
+* Restore any files backed up with backup_files earlier.
 
 =cut
 
 sub DESTROY {
     my ($self) = @_;
     return                                                       if !$self->{'_perl_pid'} || $$ != $self->{'_perl_pid'} || $disable_destructor;
+	$self->restore_files();
     $ENV{SSH_AUTH_SOCK} = $self->{'_opts'}{'_restore_auth_sock'} if $self->{'_opts'}{'_restore_auth_sock'};
     $self->{'persistent_shell'}->close()                         if $self->{'persistent_shell'};
 
