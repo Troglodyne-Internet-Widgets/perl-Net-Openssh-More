@@ -227,9 +227,15 @@ my $init_ssh = sub {
         # Now, per the POD of Net::OpenSSH, new will NEVER DIE, so just trust it.
         my @base_module_opts =
           qw{host user port password passphrase key_path gateway proxy_command batch_mode ctl_dir ctl_path ssh_cmd scp_cmd rsync_cmd remote_shell timeout kill_ssh_on_timeout strict_mode async connect master_opts default_ssh_opts forward_agent forward_X11 default_stdin_fh default_stdout_fh default_stderr_fh default_stdin_file default_stdout_file default_stderr_file master_stdout_fh master_sdterr_fh master_stdout_discard master_stderr_discard expand_vars vars external_master default_encoding default_stream_encoding default_argument_encoding password_prompt login_handler master_setpgrp master_pty_force};
-        $self = $class->SUPER::new( map { $_ => $opts->{$_} } grep { $opts->{$_} } @base_module_opts );
+	    my $class4super = "Net::OpenSSH::More";
+
+		# Subclassing here is a bit tricky, especially *after* you have gone down more than one layer.
+		# Ultimately we only ever want the constructor for Net::OpenSSH, so start there and then
+		# Re-bless into subclass if that's relevant.
+        $self = $class4super->SUPER::new( map { $_ => $opts->{$_} } grep { $opts->{$_} } @base_module_opts );
         my $error = $self->error;
         next unless ref $self eq 'Net::OpenSSH::More' && !$error;
+		bless $self, $class if ref $self ne $class;
 
         if ( $temp_fh && -s $temp_fh ) {
             seek( $temp_fh, 0, Fcntl::SEEK_SET );
@@ -553,7 +559,7 @@ Dies in this module, as this varies on different platforms (GNU/LINUX, Windows, 
 =cut
 
 sub copy {
-    die "Unimplemented, use a subclass of this perhaps?";
+	die "Unimplemented, use a subclass of this perhaps?";
 }
 
 =head2 B<backup_files (FILES)>
@@ -570,26 +576,24 @@ to be a "non-portable" method -- use the Linux.pm subclass of this if you want t
 to actually backup files without dying, or subclass your own for Windows, however they
 choose to implement `copy` with their newfangled(?) SSH daemon.
 
-C<FILES> - ARRAY_REF - File(s) to backup.
+C<FILES> - LIST - File(s) to backup.
 
 C<STASH> - BOOL - mv files on backup instead of cp.  This will make sure FILES arg path no
                   longer exists at all so a fresh FILE can be written during run.
 
 my $file = '/path/to/file.txt';
-$ssh->backup_files([$file]);
+$ssh->backup_files($file);
 
 my @files = ( '/path/to/file.txt', '/path/to/file2.txt' );
-$ssh->backup_files(\@files);
+$ssh->backup_files(@files);
 
 =cut
 
 sub backup_files {
-    my ( $self, $files, $stash ) = @_;
-
-    die "[INPUT]: ARRAYREF required by backup_files()." if ( ref $files ne 'ARRAY' );
+    my ( $self, @files ) = @_;
 
     # For each file passed in
-    foreach my $file (@$files) {
+    foreach my $file (@files) {
 
         # If the file hasn't already been backed up
         if ( !defined $self->{'file_backups'}{$file} ) {
@@ -600,14 +604,8 @@ sub backup_files {
                 # then back it up
                 $self->{'file_backups'}{$file} = time;
                 my $bkup = $file . '.' . $self->{'file_backups'}{$file};
-                if ($stash) {
-                    $self->diag("[INFO] Moving '$file' to '$bkup'");
-                    $self->sftp->rename( $file, $bkup );
-                }
-                else {
-                    $self->diag("[INFO] Backing up '$file' to '$bkup'");
-                    $self->copy( $file, $bkup );    # XXX Probably not that portable, maybe move to Linux.pm somehow?
-                }
+				$self->diag("[INFO] Backing up '$file' to '$bkup'");
+				$self->copy($file, $bkup); # XXX Probably not that portable, maybe move to Linux.pm somehow?
 
                 # otherwise if the file to be backed up doesn't exist
             }
@@ -629,23 +627,22 @@ If the file in question DID NOT exist when backup_files was last invoked for the
 then the file will instead be deleted, as that was the state of the file previous to
 actions taken in your test or script.
 
-C<FILES> - (Optional) - ARRAY_REF - File(s) to restore.
+C<FILES> - (Optional) - LIST - File(s) to restore.
 
 my $file = '/path/to/file.txt';
-$ssh->backup_files([$file]);
+$ssh->backup_files($file);
 $ssh->restore_files();
 
 =cut
 
 sub restore_files {
-    my ( $self, $files ) = @_;
+    my ( $self, @files ) = @_;
 
     # If no files were passed in then grab all files that have been backed up
-    $files //= [ keys %{ $self->{'file_backups'} } ];
-    die "[INPUT]: ARRAYREF required by restore_files()." if ( ref $files ne 'ARRAY' );
+    @files = keys( %{ $self->{'file_backups'} } ) if !@files;
 
     # foreach file
-    foreach my $file (@$files) {
+    foreach my $file (@files) {
 
         # that has been marked as modified
         if ( defined $self->{'file_backups'}{$file} ) {
@@ -684,8 +681,8 @@ the parent's destructor kicks in:
 
 sub DESTROY {
     my ($self) = @_;
-    return if !$self->{'_perl_pid'} || $$ != $self->{'_perl_pid'} || $disable_destructor;
-    $self->restore_files();
+    return                                                       if !$self->{'_perl_pid'} || $$ != $self->{'_perl_pid'} || $disable_destructor;
+	$self->restore_files();
     $ENV{SSH_AUTH_SOCK} = $self->{'_opts'}{'_restore_auth_sock'} if $self->{'_opts'}{'_restore_auth_sock'};
     $self->{'persistent_shell'}->close()                         if $self->{'persistent_shell'};
 
