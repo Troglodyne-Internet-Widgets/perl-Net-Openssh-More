@@ -47,7 +47,15 @@ my $get_addrs_for_iface = sub {
 
 =head3 B<get_primary_adapter>
 
-Method to retrieve the primary device interface from /proc/net/route
+So, on linux, there's no "primary" adapter, just the "correct" adapter
+for whatever given route. As such, what's the best way to determine
+this?
+
+This is a method to guess the "best" device interface from /proc/net/route.
+How does it determine this? By the "metric" stat -- the lower the better,
+as the lower the cost, the higher the preference.
+If you have set the metric improperly, you'll get bad results, but that's
+nothing to do with the code here.
 
 Optionally accepts a truthy arg to indicate whether you want this for the
 local host instead of the remote host.
@@ -57,23 +65,15 @@ local host instead of the remote host.
 sub get_primary_adapter {
     my ( $self, $use_local ) = @_;
     my %interfaces;
-    my $proc_route_path = do {
-        if ($use_local) {
-            File::Slurper::read_text('/proc/net/route');
-        }
-        else {
-            $self->cmd("cat /proc/net/route");
-        }
-    };
+    my $proc_route_path = $use_local ? File::Slurper::read_text('/proc/net/route') : $self->sftp->get_content('/proc/net/route');
     foreach my $line ( split( /\n/, $proc_route_path ) ) {
-        if ( $line =~ m/^(.+?)\s*0{8}\s.*?(\d+)\s+0{8}\s*(?:\d+\s*){3}$/ ) {
-            my ( $interface, $metric ) = ( $1, $2 );
-            push @{ $interfaces{$metric} }, $interface;
-        }
-    }
 
+        #                                        Iface   Destination   Gateway       Flags RefCt Use   Metric  Mask          MTU   Wndow IRTT
+        my ( $interface, $metric ) = $line =~ m/^(.+?)\s+[0-9A-F]{8}\s+[0-9A-F]{8}\s+\d+\s+\d+\s+\d+\s+(\d+)\s+[0-9A-F]{8}\s+\d+\s+\d+\s+\d+\s*$/;
+        push @{ $interfaces{$metric} }, $interface if ( length $interface && defined $metric );
+    }
     my $lowest_metric = ( sort keys %interfaces )[0];
-    my $interface     = $interfaces{$lowest_metric}[0];
+    my $interface     = $interfaces{$lowest_metric}->[0] if defined $lowest_metric && $interfaces{$lowest_metric};
     return $interface || 'eth0';
 }
 
@@ -120,7 +120,7 @@ Effectively the same thing as `cp $SOURCE $DEST` on the remote server.
 =cut
 
 sub copy {
-	my ( $self, $SOURCE, $DEST ) = @_;
+    my ( $self, $SOURCE, $DEST ) = @_;
     return $self->cmd( qw{cp -a}, $SOURCE, $DEST );
 }
 

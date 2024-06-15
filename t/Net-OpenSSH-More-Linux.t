@@ -36,7 +36,7 @@ subtest_streamed "Live tests versus localhost" => sub {
     $obj->backup_files('/tmp/yeehaw');
     $obj->cmd(qw{touch /tmp/yeehaw});
     ok( $obj->sftp->test_e('/tmp/yeehaw'), "Created /tmp/yeehaw touch file for testing backup/restore" );
-    undef $obj;
+    $obj->DESTROY();
     $obj = Net::OpenSSH::More::Linux->new(
         'host' => 'localhost', 'use_persistent_shell' => 0, 'retry_max' => 1,
     );
