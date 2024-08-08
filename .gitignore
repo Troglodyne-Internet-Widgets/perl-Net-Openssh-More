@@ -39,6 +39,7 @@ inc/
 *.swp
 *.swo
 *.swn
+*.bak
 
 # macos
 .DS_store

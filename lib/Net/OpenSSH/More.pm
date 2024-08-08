@@ -7,16 +7,16 @@ use warnings;
 
 use parent 'Net::OpenSSH';
 
-use Data::UUID        ();
-use Expect            ();
-use File::HomeDir     ();
-use File::Temp        ();
-use Fcntl             ();
-use IO::Pty           ();
-use IO::Socket::INET  ();
-use IO::Socket::INET6 ();
-use IO::Stty          ();
-use List::Util qw{first};
+use Data::UUID         ();
+use Expect             ();
+use File::HomeDir      ();
+use File::Temp         ();
+use Fcntl              ();
+use IO::Pty            ();
+use IO::Socket::INET   ();
+use IO::Socket::INET6  ();
+use IO::Stty           ();
+use List::Util         qw{first};
 use Net::DNS::Resolver ();
 use Net::IP            ();
 use Time::HiRes        ();
