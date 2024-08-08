@@ -931,11 +931,6 @@ sub cmd_stream {
     return $send->( $self, $line_reader, @cmd );
 }
 
-=head1 AUTHORS
-
-Thomas Andrew "Andy" Baugh <andy@troglodyne.net>
-George S. Baugh <george@troglodyne.net>
-
 =head1 SPECIAL THANKS
 
 cPanel, L.L.C. - in particularly the QA department (which the authors once were in).
