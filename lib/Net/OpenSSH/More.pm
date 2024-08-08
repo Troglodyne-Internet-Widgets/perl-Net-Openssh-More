@@ -1,5 +1,7 @@
 package Net::OpenSSH::More;
 
+#ABSTRACT: Net::OpenSSH submodule with many useful features
+
 use strict;
 use warnings;
 

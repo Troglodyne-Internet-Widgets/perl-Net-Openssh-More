@@ -1,5 +1,7 @@
 package Net::OpenSSH::More::Linux;
 
+#ABSTRACT: Useful subcommands for linux machines
+
 use strict;
 use warnings;
 
