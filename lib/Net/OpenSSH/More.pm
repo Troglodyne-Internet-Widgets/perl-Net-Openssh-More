@@ -30,21 +30,47 @@ Net::OpenSSH::More
 
 Submodule of Net::OpenSSH that contains many methods that were
 otherwise left "as an exercise to the reader" in the parent module.
+
 Highlights:
-* Persistent terminal via expect for very fast execution, less forking.
-* Usage of File::Temp and auto-cleanup to prevent lingering ctl_path cruft.
-* Ability to manipulate incoming text while streaming the output of commands.
-* Run perl subroutine refs you write locally but execute remotely.
-* Many shortcut methods for common system administration tasks
-* Registration method for commands to run upon DESTROY/before disconnect.
-* Automatic reconnection ability upon connection loss
+
+=over 4
+
+=item
+
+Persistent terminal via expect for very fast execution, less forking.
+
+=item
+
+Usage of File::Temp and auto-cleanup to prevent lingering ctl_path cruft.
+
+=item
+
+Ability to manipulate incoming text while streaming the output of commands.
+
+=item
+
+Run perl subroutine refs you write locally but execute remotely.
+
+=item
+
+Many shortcut methods for common system administration tasks
+
+=item
+
+Registration method for commands to run upon DESTROY/before disconnect.
+
+=item
+
+Automatic reconnection ability upon connection loss
+
+=back
 
 =head1 SYNOPSIS
 
     use Net::OpenSSH::More;
     my $ssh = Net::OpenSSH::More->new(
-		'host'     => 'some.host.test',
-		'port'     => 69420,
+        'host'     => 'some.host.test',
+        'port'     => 69420,
         'user'     => 'azurediamond',
         'password' => 'hunter2',
     );
@@ -467,26 +493,67 @@ your username, host, port, etc. when this problem is solved much more easily
 by forcing that separation on the caller's end.
 
 ACCEPTS:
-* %opts - <HASH> A hash of key value pairs corresponding to the what you would normally pass in to Net::OpenSSH,
-  along with the following keys:
-  * use_persistent_shell - Whether or not to setup Expect to watch a persistent TTY. Less stable, but faster.
-  * expect_timeout - When the above is active, how long should we wait before your program prints something
-    before bailing out?
-  * no_agent - Pass in a truthy value to disable the SSH agent. By default the agent is enabled.
-  * die_on_drop - If, for some reason, the connection drops, just die instead of attempting reconnection.
-  * output_prefix - If given, is what we will tack onto the beginning of any output via diag method.
-    useful for streaming output to say, a TAP consumer (test) via passing in '# ' as prefix.
-  * debug - Pass in a truthy value to enable certain diag statements I've added in the module and pass -v to ssh.
-  * home - STRING corresponding to an absolute path to something that "looks like" a homedir. Defaults to the user's homedir.
-    useful in cases where you say, want to load SSH keys from a different path without changing assumptions about where
-    keys exist in a homedir on your average OpenSSH using system.
-  * no_cache - Pass in a truthy value to disable caching the connection and object, indexed by host string.
-    useful if for some reason you need many separate connections to test something. Make sure your MAX_SESSIONS is set sanely
-    in sshd_config if you use this extensively.
-  * retry_interval - In the case that sshd is not up on the remote host, how long to wait while before reattempting connection.
-    defaults to 6s. We retry $RETRY_MAX times, so this means waiting a little over a minute for SSH to come up by default.
-	If your situation requires longer intervals, pass in something longer.
-  * retry_max - Number of times to retry when a connection fails. Defaults to 10.
+
+=over 4
+
+=item
+
+%opts - <HASH> A hash of key value pairs corresponding to the what you would normally pass in to Net::OpenSSH,
+along with the following keys:
+
+=over 4
+
+=item
+
+use_persistent_shell - Whether or not to setup Expect to watch a persistent TTY. Less stable, but faster.
+
+=item
+
+expect_timeout - When the above is active, how long should we wait before your program prints something
+before bailing out?
+
+=item
+
+no_agent - Pass in a truthy value to disable the SSH agent. By default the agent is enabled.
+
+=item
+
+die_on_drop - If, for some reason, the connection drops, just die instead of attempting reconnection.
+
+=item
+
+output_prefix - If given, is what we will tack onto the beginning of any output via diag method.
+useful for streaming output to say, a TAP consumer (test) via passing in '# ' as prefix.
+
+=item
+
+debug - Pass in a truthy value to enable certain diag statements I've added in the module and pass -v to ssh.
+
+=item
+
+home - STRING corresponding to an absolute path to something that "looks like" a homedir. Defaults to the user's homedir.
+useful in cases where you say, want to load SSH keys from a different path without changing assumptions about where
+keys exist in a homedir on your average OpenSSH using system.
+
+=item
+
+no_cache - Pass in a truthy value to disable caching the connection and object, indexed by host string.
+useful if for some reason you need many separate connections to test something. Make sure your MAX_SESSIONS is set sanely
+in sshd_config if you use this extensively.
+
+=item
+
+retry_interval - In the case that sshd is not up on the remote host, how long to wait while before reattempting connection.
+defaults to 6s. We retry $RETRY_MAX times, so this means waiting a little over a minute for SSH to come up by default.
+your situation requires longer intervals, pass in something longer.
+
+=item
+
+retry_max - Number of times to retry when a connection fails. Defaults to 10.
+
+=back
+
+=back
 
 RETURNS a Net::OpenSSH::More object.
 
