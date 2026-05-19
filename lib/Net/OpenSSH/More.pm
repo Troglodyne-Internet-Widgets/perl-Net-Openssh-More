@@ -129,7 +129,8 @@ my $resolve_login_method = sub {
     return $chosen         if $chosen;
     return 'SSH_AUTH_SOCK' if $ENV{'SSH_AUTH_SOCK'};
     my $fallback_path = "$opts->{'home'}/.ssh/id";
-    ( $opts->{'key_path'} ) = map { "${fallback_path}_$_" } ( first { -s "${fallback_path}_$_" } qw{dsa rsa ecdsa} );
+    my $key_type      = first { -s "${fallback_path}_$_" } qw{ed25519 ecdsa rsa dsa};
+    $opts->{'key_path'} = "${fallback_path}_${key_type}" if defined $key_type;
 
     $die_no_trace->('No key_path or password specified and no active SSH agent; cannot connect') if !$opts->{'key_path'};
     $check_local_perms->( $opts->{'key_path'}, 0600 )                                            if $opts->{'key_path'};
@@ -563,7 +564,7 @@ We attempt to authenticate using the following details, and in this order:
 1) Use supplied key_path.
 2) Use supplied password.
 3) Use existing SSH agent (SSH_AUTH_SOCK environment variable)
-4) Use keys that may exist in $HOME/.ssh - id_rsa, id_dsa and id_ecdsa (in that order).
+4) Use keys that may exist in $HOME/.ssh - id_ed25519, id_ecdsa, id_rsa and id_dsa (in that order).
 
 If all methods therein fail, we will die, as nothing will likely work at that point.
 It is important to be aware of this if your remove host has something like fail2ban or cPHulkd
