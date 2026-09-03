@@ -111,10 +111,13 @@ my $check_local_perms = sub {
     my ( $path, $expected_mode, $is_dir ) = @_;
     $is_dir //= 0;
     my @stat = stat($path);
+    ## no critic(BitwiseOperator)
     $die_no_trace->(qq{"$path" must be a directory that exists}) unless !$is_dir ^ -d _;
+    ## no critic(BitwiseOperator)
     $die_no_trace->(qq{"$path" must be a file that exists})      unless $is_dir ^ -f _;
     $die_no_trace->(qq{"$path" could not be read})               unless -r _;
 
+    ## no critic(BitwiseOperator)
     my $actual_mode = $stat[2] & 07777;
     $die_no_trace->( sprintf( qq{Permissions on "$path" are not correct: got=0%o, expected=0%o}, $actual_mode, $expected_mode ) ) unless $expected_mode eq $actual_mode;
     return 1;
@@ -158,7 +161,12 @@ my $ping = sub {
         $ip     = $opts->{'host'};
     }
     else {
-        my $host_info = first { $get_dns_record_from_hostname->( $opts->{'host'}, $_ ) } qw{A AAAA};
+        my $host_info = {};
+        foreach my $type (qw{A AAAA}) {
+            $host_info = $get_dns_record_from_hostname->( $opts->{'host'}, $type );
+            last if $host_info;
+        }
+        $host_info //= {};
         ($r_type) = keys(%$host_info);
         if ( !$host_info->{$r_type} ) {
             require Data::Dumper;

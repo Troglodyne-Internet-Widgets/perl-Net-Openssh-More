@@ -1,5 +1,8 @@
 Revision history for Net-OpenSSH-More
 
+1.02 2026-09-03 TEODESIAN
+    - Fix bused DNS resolution logic
+
 1.01 2026-05-19 TEODESIAN
     - Fixes to documentation formatting
     - Address some install test issues
