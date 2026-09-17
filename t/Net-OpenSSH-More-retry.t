@@ -37,8 +37,12 @@ subtest_streamed "retry_interval is waited out between attempts" => sub {
     my $attempts    = 0;
     my $parent_mock = Test::MockModule->new('Net::OpenSSH');
     $parent_mock->redefine(
-        'new'          => sub { $attempts++; return bless {}, $_[0]; },
-        'error'        => sub { return $attempts <= 2 ? 'Permission denied (publickey).' : 0; },
+        'new' => sub { $attempts++; return bless {}, $_[0]; },
+
+        # Deliberately not a refused credential. Those are not retried at all
+        # unless retry_on_auth_failure asks for it, and what is under test here
+        # is the interval between attempts rather than which failures earn one.
+        'error'        => sub { return $attempts <= 2 ? 'master would not come up' : 0; },
         'check_master' => sub { return $attempts > 2; },
     );
     {

@@ -84,13 +84,14 @@ Net::OpenSSH::More::Linux
 =cut
 
 my %defaults = (
-    'user'                 => $ENV{'USER'} || getpwuid($>),
-    'port'                 => 22,
-    'use_persistent_shell' => 0,
-    'output_prefix'        => '',
-    'home'                 => File::HomeDir->my_home,
-    'retry_interval'       => 6,
-    'retry_max'            => 10,
+    'user'                  => $ENV{'USER'} || getpwuid($>),
+    'port'                  => 22,
+    'use_persistent_shell'  => 0,
+    'output_prefix'         => '',
+    'home'                  => File::HomeDir->my_home,
+    'retry_interval'        => 6,
+    'retry_max'             => 10,
+    'retry_on_auth_failure' => 0,
 );
 
 our %cache;
@@ -190,7 +191,28 @@ my $ping = sub {
     return 0;
 };
 
-my $init_ssh = sub {
+# Whether the machine on the other end is still there, which check_master alone
+# cannot answer: it asks the local master process, and that stays up and happy
+# when the far end has been rebuilt, rebooted or destroyed underneath it. The
+# only thing that settles it is asking the far end to do something.
+#
+# Costs a round trip, so it belongs where a connection is being adopted rather
+# than on the path of every command.
+my $far_end_answers = sub {
+    my ($self) = @_;
+
+    return 0 if !$self->check_master;
+
+    local $@;
+    my $answered = eval { $self->test('true') };
+    return $answered ? 1 : 0;
+};
+
+# Declared before it is assigned because it calls itself: a connection adopted
+# from the environment is only found to be stale once there is an object to ask,
+# and the way back from that is to start over without it.
+my $init_ssh;
+$init_ssh = sub {
     my ( $class, $opts ) = @_;
 
     # Always clear the cache if possible when we get here.
@@ -221,7 +243,12 @@ my $init_ssh = sub {
     }
     else {
         if ( !$opts->{'debug'} ) {
-            open( $temp_fh, ">", "$tmp_dir/STDERR" ) or $die_no_trace->("Can't open $tmp_dir/STDERR for writing: $!");
+
+            # +> rather than >, because the retry loop reads this back to find
+            # out what ssh said. A write-only handle answers readline with a
+            # warning and undef, so the read was never going to work whatever
+            # else was fixed around it.
+            open( $temp_fh, "+>", "$tmp_dir/STDERR" ) or $die_no_trace->("Can't open $tmp_dir/STDERR for reading and writing: $!");
             $opts->{'master_stderr_fh'} = $temp_fh;
         }
         $opts->{'ctl_dir'}     = $tmp_dir;
@@ -270,25 +297,42 @@ my $init_ssh = sub {
           qw{host user port password passphrase key_path gateway proxy_command batch_mode ctl_dir ctl_path ssh_cmd scp_cmd rsync_cmd remote_shell timeout kill_ssh_on_timeout strict_mode async connect master_opts default_ssh_opts forward_agent forward_X11 default_stdin_fh default_stdout_fh default_stderr_fh default_stdin_file default_stdout_file default_stderr_file master_stdout_fh master_stderr_fh master_stdout_discard master_stderr_discard expand_vars vars external_master default_encoding default_stream_encoding default_argument_encoding password_prompt login_handler master_setpgrp master_pty_force};
         my $class4super = "Net::OpenSSH::More";
 
+        # Throw away what the last attempt's master wrote, so the checks below
+        # judge this attempt rather than the one before it.
+        if ($temp_fh) {
+            truncate( $temp_fh, 0 );
+            seek( $temp_fh, 0, Fcntl::SEEK_SET );
+        }
+
         # Subclassing here is a bit tricky, especially *after* you have gone down more than one layer.
         # Ultimately we only ever want the constructor for Net::OpenSSH, so start there and then
         # Re-bless into subclass if that's relevant.
         $self = $class4super->SUPER::new( map { $_ => $opts->{$_} } grep { $opts->{$_} } @base_module_opts );
-        my $error = $self->error;
-        next unless ref $self eq 'Net::OpenSSH::More' && !$error;
-        bless $self, $class if ref $self ne $class;
+        my $ssh_error = $self->error;
+        my $error     = $ssh_error;
 
+        # What ssh said has to be in hand before anything decides to retry.
+        # Net::OpenSSH sets error whenever the master will not come up, which is
+        # exactly what a refused credential looks like, so reading this only
+        # afterwards meant the checks below never saw a word of it.
         if ( $temp_fh && -s $temp_fh ) {
             seek( $temp_fh, 0, Fcntl::SEEK_SET );
             local $/;
-            $error .= " " . readline($temp_fh);
+            $error .= " " . ( readline($temp_fh) // q{} );
         }
 
-        if ($error) {
+        # Only these checks read the combined text.  A connection that works
+        # writes to the same file -- the host key warning, at least -- so
+        # deciding whether to retry on it would retry every connection ever
+        # made.  That is what $ssh_error is kept separate for.
+        if ( $error && !$opts->{'retry_on_auth_failure'} ) {
             $die_no_trace->("Bad password passed, will not retry SSH connection: $error.") if ( $error =~ m{bad password}                       && $opts->{'password'} );
             $die_no_trace->("Bad key, will not retry SSH connection: $error.")             if ( $error =~ m{master process exited unexpectedly} && $opts->{'key_path'} );
             $die_no_trace->("Bad credentials, will not retry SSH connection: $error.")     if ( $error =~ m{Permission denied} );
         }
+
+        next unless ref $self eq 'Net::OpenSSH::More' && !$ssh_error;
+        bless $self, $class if ref $self ne $class;
 
         # Diagnosed against $opts rather than the object: _opts is not stashed
         # onto it until after this returns, and the host lives in _host there
@@ -303,8 +347,31 @@ my $init_ssh = sub {
     }
     $die_no_trace->("Failed to establish SSH connection after $opts->{'retry_max'} attempts. Stopping here.") if ( !$status );
 
-    # Setup connection caching if needed
-    if ( !$opts->{'no_cache'} && !$opts->{'_host_sock_key'} ) {
+    # An adopted master is somebody else's, and all we knew when we took it was
+    # that a socket file existed at that path.  That says nothing about the
+    # machine at the far end, which may have gone away since whoever published
+    # it last spoke to it.  Drop the stale entry and build our own instead.
+    # Deleting it first is what stops this going round again: the block that
+    # adopts one cannot fire with the variable gone.
+    if ( $opts->{'external_master'} && !$far_end_answers->($self) ) {
+        delete $ENV{ $opts->{'_host_sock_key'} };
+        delete $opts->{'external_master'};
+        delete $opts->{'ctl_path'};
+
+        local $disable_destructor = 1;
+        return $init_ssh->( $class, $opts );
+    }
+
+    # Publish this master's socket if nobody has yet.  _host_sock_key is given a
+    # value a few lines above unconditionally, so testing it here -- rather than
+    # what it names in the environment -- meant this never ran once, and it
+    # would have used an empty string as the variable name if it had.
+    #
+    # disown_master hands the master process over: Net::OpenSSH stops counting
+    # it as ours, so it is not torn down with this object and outlives the
+    # program that made it. That is what makes the socket worth publishing, and
+    # it is also why this only happens when caching was asked for.
+    if ( !$opts->{'no_cache'} && !$ENV{ $opts->{'_host_sock_key'} } ) {
         $self->{'master_pid'} = $self->disown_master();
         $ENV{ $opts->{'_host_sock_key'} } = $self->get_ctl_path();
     }
@@ -555,6 +622,27 @@ no_cache - Pass in a truthy value to disable caching the connection and object, 
 useful if for some reason you need many separate connections to test something. Make sure your MAX_SESSIONS is set sanely
 in sshd_config if you use this extensively.
 
+Two things about that cache are worth knowing. Asking for the same user, host and
+port hands you back the object somebody else got, rather than a new connection.
+And a machine can be rebuilt or rebooted at an address between one call and the
+next, so a cached object is checked against its far end before you get it, and
+quietly replaced if the machine it was built for is no longer answering.
+
+Leaving the cache on also publishes this connection's control socket into the
+environment as NET_OPENSSH_MASTER_<host>_<user>, so that anything this program
+starts reuses the connection rather than opening one of its own. Sharing a master
+is the point of the arrangement rather than a consequence of it: against a host
+you are about to run thousands of ssh-based tests on, a connection per test costs
+a handshake, a key exchange and an authentication per test, and puts enough of
+them in flight at once to run sshd out of the session limit the paragraph above
+warns about. Shared, every connection after the first is a channel on the one
+already open.
+
+That is what disowning the master buys, and why it outlives the object that
+opened it: the things reusing the socket outlive that object too. Nothing reaps
+it for you afterwards, so pass no_cache when what you want is a connection that
+goes away with the program.
+
 =item
 
 retry_interval - In the case that sshd is not up on the remote host, how long to wait while before reattempting connection.
@@ -567,14 +655,15 @@ retry_max - Number of times to retry when a connection fails. Defaults to 10.
 
 =item
 
-B<Take care retrying against a host that is watching.> A rejected credential is
-retried like any other failure, so fail2ban -- or any equivalent jail -- sees
-retry_max consecutive authentication failures from your address. Worse, ssh
-offers every key in your agent on each attempt, so what the remote host counts
-is retry_max multiplied by the number of keys you are carrying -- which, with a
-well stocked agent, is an easy way to have yourself banned from a box you
-administer. Lower retry_max, or pass no_agent, when connecting somewhere that is
-likely to be counting.
+retry_on_auth_failure - Pass in a truthy value to retry when the far end refuses
+the credential, rather than giving up on the first refusal. Off by default,
+which is what you want nearly always: ssh offers every key in your agent on each
+attempt, so retrying a refusal presents the far end with retry_max failures
+times however many keys you are carrying, and a host running fail2ban or cPHulkd
+will ban you for it. Turn it on when a refusal is expected to be temporary --
+waiting for a machine that is still being built, whose authorized_keys is
+written well after sshd starts answering -- and lower retry_max, or pass
+no_agent, if that machine is also likely to be counting.
 
 =back
 
@@ -607,7 +696,20 @@ sub new {
     # Set defaults, check if we can return early
     %opts = ( %defaults, %opts );
     $opts{'_cache_index'} = "$opts{'user'}_$opts{'host'}_$opts{'port'}";
-    return $cache{ $opts{'_cache_index'} } unless $opts{'no_cache'} || !$cache{ $opts{'_cache_index'} };
+
+    # A cached object is only worth having if it still reaches the machine it
+    # was built for. Rebuild a host at the same address -- which is an ordinary
+    # thing to do to a VM -- and the cached object here is pointed at something
+    # that no longer exists, while its local master sits there looking healthy.
+    # Handing that back means the caller's first command dies on a broken pipe
+    # rather than the login failing, which is a long way from the cause.
+    if ( !$opts{'no_cache'} && $cache{ $opts{'_cache_index'} } ) {
+        my $cached = $cache{ $opts{'_cache_index'} };
+        return $cached if $far_end_answers->($cached);
+
+        local $disable_destructor = 1;
+        delete $cache{ $opts{'_cache_index'} };
+    }
 
     # Figure out how we're gonna login
     $opts{'_login_method'} = $resolve_login_method->( \%opts );
