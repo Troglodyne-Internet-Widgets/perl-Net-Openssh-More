@@ -1,5 +1,10 @@
 Revision history for Net-OpenSSH-More
 
+1.03 2026-09-17 TEODESIAN
+    - Honour retry_interval between connection attempts
+    - Warn in the POD about retrying auth failures against a host running fail2ban
+    - Stop the retry diagnostics printing an empty host and warning twice about it
+
 1.02 2026-09-03 TEODESIAN
     - Fix bused DNS resolution logic
 
