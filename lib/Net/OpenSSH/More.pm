@@ -191,7 +191,28 @@ my $ping = sub {
     return 0;
 };
 
-my $init_ssh = sub {
+# Whether the machine on the other end is still there, which check_master alone
+# cannot answer: it asks the local master process, and that stays up and happy
+# when the far end has been rebuilt, rebooted or destroyed underneath it. The
+# only thing that settles it is asking the far end to do something.
+#
+# Costs a round trip, so it belongs where a connection is being adopted rather
+# than on the path of every command.
+my $far_end_answers = sub {
+    my ($self) = @_;
+
+    return 0 if !$self->check_master;
+
+    local $@;
+    my $answered = eval { $self->test('true') };
+    return $answered ? 1 : 0;
+};
+
+# Declared before it is assigned because it calls itself: a connection adopted
+# from the environment is only found to be stale once there is an object to ask,
+# and the way back from that is to start over without it.
+my $init_ssh;
+$init_ssh = sub {
     my ( $class, $opts ) = @_;
 
     # Always clear the cache if possible when we get here.
@@ -326,8 +347,31 @@ my $init_ssh = sub {
     }
     $die_no_trace->("Failed to establish SSH connection after $opts->{'retry_max'} attempts. Stopping here.") if ( !$status );
 
-    # Setup connection caching if needed
-    if ( !$opts->{'no_cache'} && !$opts->{'_host_sock_key'} ) {
+    # An adopted master is somebody else's, and all we knew when we took it was
+    # that a socket file existed at that path.  That says nothing about the
+    # machine at the far end, which may have gone away since whoever published
+    # it last spoke to it.  Drop the stale entry and build our own instead.
+    # Deleting it first is what stops this going round again: the block that
+    # adopts one cannot fire with the variable gone.
+    if ( $opts->{'external_master'} && !$far_end_answers->($self) ) {
+        delete $ENV{ $opts->{'_host_sock_key'} };
+        delete $opts->{'external_master'};
+        delete $opts->{'ctl_path'};
+
+        local $disable_destructor = 1;
+        return $init_ssh->( $class, $opts );
+    }
+
+    # Publish this master's socket if nobody has yet.  _host_sock_key is given a
+    # value a few lines above unconditionally, so testing it here -- rather than
+    # what it names in the environment -- meant this never ran once, and it
+    # would have used an empty string as the variable name if it had.
+    #
+    # disown_master hands the master process over: Net::OpenSSH stops counting
+    # it as ours, so it is not torn down with this object and outlives the
+    # program that made it. That is what makes the socket worth publishing, and
+    # it is also why this only happens when caching was asked for.
+    if ( !$opts->{'no_cache'} && !$ENV{ $opts->{'_host_sock_key'} } ) {
         $self->{'master_pid'} = $self->disown_master();
         $ENV{ $opts->{'_host_sock_key'} } = $self->get_ctl_path();
     }
@@ -578,6 +622,19 @@ no_cache - Pass in a truthy value to disable caching the connection and object, 
 useful if for some reason you need many separate connections to test something. Make sure your MAX_SESSIONS is set sanely
 in sshd_config if you use this extensively.
 
+Two things about that cache are worth knowing. Asking for the same user, host and
+port hands you back the object somebody else got, rather than a new connection.
+And a machine can be rebuilt or rebooted at an address between one call and the
+next, so a cached object is checked against its far end before you get it, and
+quietly replaced if the machine it was built for is no longer answering.
+
+Leaving the cache on also publishes this connection's control socket into the
+environment as NET_OPENSSH_MASTER_<host>_<user>, so that child processes reuse
+it rather than opening their own. The master process is disowned to make that
+work, which means it is no longer torn down along with the object and will
+outlive the program unless something kills it. Pass no_cache if you would rather
+not leave one behind.
+
 =item
 
 retry_interval - In the case that sshd is not up on the remote host, how long to wait while before reattempting connection.
@@ -631,7 +688,20 @@ sub new {
     # Set defaults, check if we can return early
     %opts = ( %defaults, %opts );
     $opts{'_cache_index'} = "$opts{'user'}_$opts{'host'}_$opts{'port'}";
-    return $cache{ $opts{'_cache_index'} } unless $opts{'no_cache'} || !$cache{ $opts{'_cache_index'} };
+
+    # A cached object is only worth having if it still reaches the machine it
+    # was built for. Rebuild a host at the same address -- which is an ordinary
+    # thing to do to a VM -- and the cached object here is pointed at something
+    # that no longer exists, while its local master sits there looking healthy.
+    # Handing that back means the caller's first command dies on a broken pipe
+    # rather than the login failing, which is a long way from the cause.
+    if ( !$opts{'no_cache'} && $cache{ $opts{'_cache_index'} } ) {
+        my $cached = $cache{ $opts{'_cache_index'} };
+        return $cached if $far_end_answers->($cached);
+
+        local $disable_destructor = 1;
+        delete $cache{ $opts{'_cache_index'} };
+    }
 
     # Figure out how we're gonna login
     $opts{'_login_method'} = $resolve_login_method->( \%opts );
