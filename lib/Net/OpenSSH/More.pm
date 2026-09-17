@@ -253,6 +253,10 @@ my $init_ssh = sub {
     my $self;
     foreach my $attempt ( 1 .. $opts->{'retry_max'} ) {
 
+        # Have to wait here: the `next` statements further down short-circuit
+        # past the foot of the loop.
+        sleep $opts->{'retry_interval'} if $attempt > 1;
+
         local $@;
         my $up = $ping->($opts);
         if ( !$up ) {
@@ -286,15 +290,16 @@ my $init_ssh = sub {
             $die_no_trace->("Bad credentials, will not retry SSH connection: $error.")     if ( $error =~ m{Permission denied} );
         }
 
+        # Diagnosed against $opts rather than the object: _opts is not stashed
+        # onto it until after this returns, and the host lives in _host there
+        # rather than host.
         if ( defined $self->error && $self->error ne "0" && $attempt == 1 ) {
-            $self->diag( "SSH Connection could not be established to " . $self->{'host'} . " with the error:", $error, 'Will Retry 10 times.' );
+            diag( { '_opts' => $opts }, "SSH Connection could not be established to $opts->{'host'} with the error:", $error, "Will retry $opts->{'retry_max'} times." );
         }
         if ( $status = $self->check_master() ) {
-            $self->diag( "Successfully established connection to " . $self->{'host'} . " on attempt #$attempt." ) if $attempt gt 1;
+            diag( { '_opts' => $opts }, "Successfully established connection to $opts->{'host'} on attempt #$attempt." ) if $attempt gt 1;
             last;
         }
-
-        sleep $opts->{'retry_interval'};
     }
     $die_no_trace->("Failed to establish SSH connection after $opts->{'retry_max'} attempts. Stopping here.") if ( !$status );
 
@@ -559,6 +564,17 @@ your situation requires longer intervals, pass in something longer.
 =item
 
 retry_max - Number of times to retry when a connection fails. Defaults to 10.
+
+=item
+
+B<Take care retrying against a host that is watching.> A rejected credential is
+retried like any other failure, so fail2ban -- or any equivalent jail -- sees
+retry_max consecutive authentication failures from your address. Worse, ssh
+offers every key in your agent on each attempt, so what the remote host counts
+is retry_max multiplied by the number of keys you are carrying -- which, with a
+well stocked agent, is an easy way to have yourself banned from a box you
+administer. Lower retry_max, or pass no_agent, when connecting somewhere that is
+likely to be counting.
 
 =back
 
