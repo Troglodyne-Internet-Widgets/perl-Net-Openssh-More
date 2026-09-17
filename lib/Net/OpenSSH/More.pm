@@ -253,12 +253,8 @@ my $init_ssh = sub {
     my $self;
     foreach my $attempt ( 1 .. $opts->{'retry_max'} ) {
 
-        # Waiting happens here rather than at the foot of the loop because the
-        # `next` statements below jump straight past anything down there.  A
-        # host that is down and a connection that fails both take one, which is
-        # every failure bar a live connection failing check_master -- so a sleep
-        # at the bottom ran almost never, and retry_max attempts were made back
-        # to back with no interval between them at all.
+        # Have to wait here: the `next` statements further down short-circuit
+        # past the foot of the loop.
         sleep $opts->{'retry_interval'} if $attempt > 1;
 
         local $@;
@@ -296,8 +292,7 @@ my $init_ssh = sub {
 
         # Diagnosed against $opts rather than the object: _opts is not stashed
         # onto it until after this returns, and the host lives in _host there
-        # rather than host, so both of these printed an empty string and warned
-        # twice over for it.
+        # rather than host.
         if ( defined $self->error && $self->error ne "0" && $attempt == 1 ) {
             diag( { '_opts' => $opts }, "SSH Connection could not be established to $opts->{'host'} with the error:", $error, "Will retry $opts->{'retry_max'} times." );
         }
