@@ -267,7 +267,7 @@ my $init_ssh = sub {
 
         # Now, per the POD of Net::OpenSSH, new will NEVER DIE, so just trust it.
         my @base_module_opts =
-          qw{host user port password passphrase key_path gateway proxy_command batch_mode ctl_dir ctl_path ssh_cmd scp_cmd rsync_cmd remote_shell timeout kill_ssh_on_timeout strict_mode async connect master_opts default_ssh_opts forward_agent forward_X11 default_stdin_fh default_stdout_fh default_stderr_fh default_stdin_file default_stdout_file default_stderr_file master_stdout_fh master_sdterr_fh master_stdout_discard master_stderr_discard expand_vars vars external_master default_encoding default_stream_encoding default_argument_encoding password_prompt login_handler master_setpgrp master_pty_force};
+          qw{host user port password passphrase key_path gateway proxy_command batch_mode ctl_dir ctl_path ssh_cmd scp_cmd rsync_cmd remote_shell timeout kill_ssh_on_timeout strict_mode async connect master_opts default_ssh_opts forward_agent forward_X11 default_stdin_fh default_stdout_fh default_stderr_fh default_stdin_file default_stdout_file default_stderr_file master_stdout_fh master_stderr_fh master_stdout_discard master_stderr_discard expand_vars vars external_master default_encoding default_stream_encoding default_argument_encoding password_prompt login_handler master_setpgrp master_pty_force};
         my $class4super = "Net::OpenSSH::More";
 
         # Subclassing here is a bit tricky, especially *after* you have gone down more than one layer.
