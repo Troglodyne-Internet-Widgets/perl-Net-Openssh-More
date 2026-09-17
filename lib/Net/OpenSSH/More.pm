@@ -629,11 +629,19 @@ next, so a cached object is checked against its far end before you get it, and
 quietly replaced if the machine it was built for is no longer answering.
 
 Leaving the cache on also publishes this connection's control socket into the
-environment as NET_OPENSSH_MASTER_<host>_<user>, so that child processes reuse
-it rather than opening their own. The master process is disowned to make that
-work, which means it is no longer torn down along with the object and will
-outlive the program unless something kills it. Pass no_cache if you would rather
-not leave one behind.
+environment as NET_OPENSSH_MASTER_<host>_<user>, so that anything this program
+starts reuses the connection rather than opening one of its own. Sharing a master
+is the point of the arrangement rather than a consequence of it: against a host
+you are about to run thousands of ssh-based tests on, a connection per test costs
+a handshake, a key exchange and an authentication per test, and puts enough of
+them in flight at once to run sshd out of the session limit the paragraph above
+warns about. Shared, every connection after the first is a channel on the one
+already open.
+
+That is what disowning the master buys, and why it outlives the object that
+opened it: the things reusing the socket outlive that object too. Nothing reaps
+it for you afterwards, so pass no_cache when what you want is a connection that
+goes away with the program.
 
 =item
 
