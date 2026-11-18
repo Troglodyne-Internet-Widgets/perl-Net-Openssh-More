@@ -321,7 +321,8 @@ $init_ssh = sub {
         # Subclassing here is a bit tricky, especially *after* you have gone down more than one layer.
         # Ultimately we only ever want the constructor for Net::OpenSSH, so start there and then
         # Re-bless into subclass if that's relevant.
-        $self = $class4super->SUPER::new( map { $_ => $opts->{$_} } grep { $opts->{$_} } @base_module_opts );
+        # Defined, not true: a 0, such as strict_mode above, is a choice.
+        $self = $class4super->SUPER::new( map { $_ => $opts->{$_} } grep { defined $opts->{$_} } @base_module_opts );
         my $ssh_error = $self->error;
         my $error     = $ssh_error;
 

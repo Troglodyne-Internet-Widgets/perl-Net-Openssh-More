@@ -1,5 +1,13 @@
 Revision history for Net-OpenSSH-More
 
+1.06 (not yet released)
+    - Pass an option of 0, such as strict_mode, to Net::OpenSSH.  The
+      control directory in a TMPDIR whose parent the group may write was
+      refused as not secure, because strict_mode => 0 never arrived.
+
+1.05 2026-09-28 TEODESIAN
+    - Note the reason an SSH connection failed
+
 1.04 2026-09-18 TEODESIAN
     - Fix test failure due to inability to open a port
 
