@@ -251,7 +251,6 @@ $init_ssh = sub {
             open( $temp_fh, "+>", "$tmp_dir/STDERR" ) or $die_no_trace->("Can't open $tmp_dir/STDERR for reading and writing: $!");
             $opts->{'master_stderr_fh'} = $temp_fh;
         }
-        $opts->{'ctl_dir'}     = $tmp_dir;
         $opts->{'strict_mode'} = 0;
 
         $opts->{'master_opts'} = [
@@ -305,6 +304,9 @@ $init_ssh = sub {
             diag( { '_opts' => $opts }, "Waiting for host to bring up sshd, attempt $attempt..." );
             next;
         }
+
+        # A short name for each attempt, because a socket path holds 108 bytes.
+        $opts->{'ctl_path'} = "$tmp_dir/$attempt" if !$opts->{'external_master'};
 
         # Now, per the POD of Net::OpenSSH, new will NEVER DIE, so just trust it.
         my @base_module_opts =
