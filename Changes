@@ -1,6 +1,6 @@
 Revision history for Net-OpenSSH-More
 
-1.07 (not yet released)
+1.07 2026-11-20 TEODESIAN
     - Reconnect in the object that the caller holds.  A command that found
       the master gone opened a new one, but the caller's object kept the
       dead one, so the command failed again with "open3pty failed".
