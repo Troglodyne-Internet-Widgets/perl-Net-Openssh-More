@@ -1,5 +1,11 @@
 Revision history for Net-OpenSSH-More
 
+1.08 (not yet released)
+    - Say that a host does not resolve, and which record types were asked
+      for, rather than "Can't determine IP type. $VAR1 = {};"
+    - Fall through to AAAA when the A answer is only a CNAME, so a name
+      that aliases an IPv6-only host resolves
+
 1.07 2026-11-20 TEODESIAN
     - Reconnect in the object that the caller holds.  A command that found
       the master gone opened a new one, but the caller's object kept the
