@@ -148,7 +148,8 @@ my $get_dns_record_from_hostname = sub {
 
     my $reply = Net::DNS::Resolver->new()->search( $hostname, $record_type );
     return unless $reply;
-    return { map { $_->type() => $_->address() } grep { $_->type eq $record_type } ( $reply->answer() ) };
+    my %addresses = map { $_->type() => $_->address() } grep { $_->type eq $record_type } ( $reply->answer() );
+    return %addresses ? \%addresses : undef;
 };
 
 # Knock on the server till it responds, or doesn't. Try both ipv4 and ipv6.
@@ -162,17 +163,13 @@ my $ping = sub {
         $ip     = $opts->{'host'};
     }
     else {
-        my $host_info = {};
+        my $host_info;
         foreach my $type (qw{A AAAA}) {
             $host_info = $get_dns_record_from_hostname->( $opts->{'host'}, $type );
             last if $host_info;
         }
-        $host_info //= {};
+        $die_no_trace->("$opts->{'host'} does not resolve: DNS has no A or AAAA record for it") if !$host_info;
         ($r_type) = keys(%$host_info);
-        if ( !$host_info->{$r_type} ) {
-            require Data::Dumper;
-            die "Can't determine IP type. " . Data::Dumper::Dumper($host_info);
-        }
         $ip = $host_info->{$r_type};
     }
     my %family_map = ( 'A' => 'INET', 'AAAA' => 'INET6' );
