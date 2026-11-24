@@ -1,17 +1,14 @@
+use 5.014;
 use strict;
 use warnings;
+use re '/aaxs';
 
 use Test2::V0;
-use Test2::Tools::Explain;
 use Test2::Tools::Subtest qw{subtest_streamed};
 use Test2::Plugin::NoWarnings;
 use Test::MockModule qw{strict};
 
 use IO::Socket::INET;
-
-use FindBin;
-
-use lib "$FindBin::Bin/../lib";
 
 use Net::OpenSSH::More;
 
@@ -57,15 +54,13 @@ subtest_streamed "Common tests using mocks" => sub {
     $parent_mock->redefine(
         'new'          => sub { bless {}, $_[0] },
         'check_master' => 1,
+        'DESTROY'      => sub { undef },
     );
-    {
-        # MockModule can't actually redefine destructors properly due to the mock also going out of scope.
-        no warnings qw{redefine};
-        *Net::OpenSSH::DESTROY = sub { undef };
-    }
     my $obj = Net::OpenSSH::More->new( 'host' => '127.0.0.1', retry_max => 1, 'port' => $listener->sockport(), 'output_prefix' => '# ', 'password' => 'mock' );
     is( ref $obj,           'Net::OpenSSH::More', "Got right ref type for object upon instantiation" );
     is( $obj->diag("Whee"), undef,                "You should see whee before this subtest" );
 };
 
 done_testing();
+
+1;

@@ -1,5 +1,8 @@
+use 5.014;
 use strict;
 use warnings;
+use re '/aaxs';
+no autovivification;
 
 use Test2::V0;
 use Test2::Tools::Subtest qw{subtest_streamed};
@@ -7,10 +10,6 @@ use Test2::Plugin::NoWarnings;
 use Test::MockModule qw{strict};
 
 use IO::Socket::INET;
-
-use FindBin;
-
-use lib "$FindBin::Bin/../lib";
 
 use Net::OpenSSH::More;
 
@@ -35,11 +34,8 @@ subtest_streamed "an option of 0 reaches Net::OpenSSH" => sub {
         'new'          => sub { my ( $class, %args ) = @_; %got = %args; return bless {}, $class; },
         'error'        => sub { return 0; },
         'check_master' => sub { return 1; },
+        'DESTROY'      => sub { undef },
     );
-    {
-        no warnings qw{redefine};
-        *Net::OpenSSH::DESTROY = sub { undef };
-    }
 
     my $obj = Net::OpenSSH::More->new(
         'host'       => '127.0.0.1',
@@ -51,9 +47,9 @@ subtest_streamed "an option of 0 reaches Net::OpenSSH" => sub {
         'no_cache'   => 1,
     );
 
-    is( ref $obj, 'Net::OpenSSH::More', "Connected" );
-    is( $got{'strict_mode'}, 0, "strict_mode => 0 reaches Net::OpenSSH, so a control directory under a parent that the group may write is accepted" );
-    is( [ @got{qw{batch_mode timeout}} ], [ 0, 0 ], "and so does an option of 0 that the caller passed" );
+    is( ref $obj,                         'Net::OpenSSH::More', "Connected" );
+    is( $got{'strict_mode'},              0,                    "strict_mode => 0 reaches Net::OpenSSH, so a control directory under a parent that the group may write is accepted" );
+    is( [ @got{qw{batch_mode timeout}} ], [ 0, 0 ],             "and so does an option of 0 that the caller passed" );
     ok( !exists $got{'gateway'}, "but an option that nobody set is not passed, so the default of Net::OpenSSH applies" );
 };
 
@@ -76,11 +72,8 @@ subtest_streamed "each attempt gets a short control socket of its own" => sub {
         'new'          => sub { my ( $class, %args ) = @_; push @got, \%args; return bless {}, $class; },
         'error'        => sub { return @got < 2 ? 'master would not come up' : 0; },
         'check_master' => sub { return 1; },
+        'DESTROY'      => sub { undef },
     );
-    {
-        no warnings qw{redefine};
-        *Net::OpenSSH::DESTROY = sub { undef };
-    }
 
     my $obj = Net::OpenSSH::More->new(
         'host'      => '127.0.0.1',
@@ -99,3 +92,5 @@ subtest_streamed "each attempt gets a short control socket of its own" => sub {
 };
 
 done_testing();
+
+1;

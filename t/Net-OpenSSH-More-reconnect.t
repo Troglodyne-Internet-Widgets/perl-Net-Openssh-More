@@ -1,5 +1,8 @@
+use 5.014;
 use strict;
 use warnings;
+use re '/aaxs';
+no autovivification;
 
 use Test2::V0;
 use Test2::Tools::Subtest qw{subtest_streamed};
@@ -9,10 +12,6 @@ use Test::MockModule qw{strict};
 use IO::Socket::INET;
 use POSIX();
 use Capture::Tiny();
-
-use FindBin;
-
-use lib "$FindBin::Bin/../lib";
 
 use Net::OpenSSH::More;
 
@@ -45,6 +44,10 @@ subtest_streamed "a command after the master died runs on a new master, in the s
             return if $self->{'dead'};
             my $out = "ran on $self->{'gen'}\n";
             my $err = q{};
+
+            # In-memory handles that the caller reads from and closes, so there
+            # is nothing here to close them for.
+            ## no critic (InputOutput::RequireBriefOpen)
             open( my $pty,    '<', \$out ) or die;
             open( my $stderr, '<', \$err ) or die;
 
@@ -53,13 +56,8 @@ subtest_streamed "a command after the master died runs on a new master, in the s
             POSIX::_exit(0) if !$pid;
             return ( $pty, $stderr, $pid );
         },
+        'DESTROY' => sub { push( @torn_down, $_[0]{'gen'} ) if $_[0]{'gen'}; return },
     );
-    {
-        # MockModule can't redefine destructors properly, as the mock goes out
-        # of scope along with the thing it is mocking.
-        no warnings qw{redefine};
-        *Net::OpenSSH::DESTROY = sub { push( @torn_down, $_[0]{'gen'} ) if $_[0]{'gen'}; return };
-    }
 
     my $obj = Net::OpenSSH::More->new(
         'host'                 => '127.0.0.1',
@@ -84,3 +82,5 @@ subtest_streamed "a command after the master died runs on a new master, in the s
 };
 
 done_testing();
+
+1;

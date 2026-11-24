@@ -15,7 +15,7 @@ tidy:
 	perltidy -b t/*.t
 
 depend:
-	sudo cpanm Net::OpenSSH Net::SFTP::Foreign File::Slurper Data::UUID Expect File::HomeDir File::Temp IO::Pty IO::Socket::INET IO::Socket::INET6 IO::Stty List::Util Net::DNS::Resolver Net::IP Time::HiRes Term::ANSIColor
+	sudo cpanm Net::OpenSSH Net::SFTP::Foreign File::Slurper Data::UUID Expect File::HomeDir File::Temp IO::Socket::INET IO::Socket::INET6 IPC::System::Simple autovivification List::Util Net::DNS::Resolver Net::IP Time::HiRes Term::ANSIColor
 
 testdepend:
 	sudo cpanm Test2::V0 Test2::Tools::Explain Test2::Tools::Subtest Test2::Plugin::NoWarnings Test::MockModule Capture::Tiny

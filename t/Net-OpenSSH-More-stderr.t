@@ -1,17 +1,15 @@
+use 5.014;
 use strict;
 use warnings;
+use re '/aaxs';
+no autovivification;
 
 use Test2::V0;
-use Test2::Tools::Explain;
 use Test2::Tools::Subtest qw{subtest_streamed};
 use Test2::Plugin::NoWarnings;
 use Test::MockModule qw{strict};
 
 use IO::Socket::INET;
-
-use FindBin;
-
-use lib "$FindBin::Bin/../lib";
 
 use Net::OpenSSH::More;
 
@@ -41,13 +39,8 @@ subtest_streamed "the master's stderr handle is forwarded to Net::OpenSSH" => su
         'new'          => sub { my ( $class, %args ) = @_; %got = %args; return bless {}, $class; },
         'error'        => sub { return 0; },
         'check_master' => sub { return 1; },
+        'DESTROY'      => sub { undef },
     );
-    {
-        # MockModule can't redefine destructors properly, as the mock goes out
-        # of scope along with the thing it is mocking.
-        no warnings qw{redefine};
-        *Net::OpenSSH::DESTROY = sub { undef };
-    }
 
     my $obj = Net::OpenSSH::More->new(
         'host'      => '127.0.0.1',
@@ -62,3 +55,5 @@ subtest_streamed "the master's stderr handle is forwarded to Net::OpenSSH" => su
 };
 
 done_testing();
+
+1;

@@ -2,20 +2,23 @@ package Net::OpenSSH::More;
 
 #ABSTRACT: Net::OpenSSH submodule with many useful features
 
+use 5.014;
 use strict;
-use warnings;
+use warnings FATAL => 'all';
+use re '/aaxs';
+no autovivification;
 
 use parent 'Net::OpenSSH';
 
+# Expect loads IO::Pty, and IO::Pty loads IO::Stty, which the persistent shell
+# needs for the stty methods of the pty.
 use Data::UUID         ();
 use Expect             ();
 use File::HomeDir      ();
 use File::Temp         ();
 use Fcntl              ();
-use IO::Pty            ();
 use IO::Socket::INET   ();
 use IO::Socket::INET6  ();
-use IO::Stty           ();
 use List::Util         qw{first};
 use Net::DNS::Resolver ();
 use Net::IP            ();
@@ -112,24 +115,33 @@ my $check_local_perms = sub {
     my ( $path, $expected_mode, $is_dir ) = @_;
     $is_dir //= 0;
     my @stat = stat($path);
-    ## no critic(BitwiseOperator)
-    $die_no_trace->(qq{"$path" must be a directory that exists}) unless !$is_dir ^ -d _;
-    ## no critic(BitwiseOperator)
-    $die_no_trace->(qq{"$path" must be a file that exists}) unless $is_dir ^ -f _;
-    $die_no_trace->(qq{"$path" could not be read})          unless -r _;
 
-    ## no critic(BitwiseOperator)
-    my $actual_mode = $stat[2] & 07777;
-    $die_no_trace->( sprintf( qq{Permissions on "$path" are not correct: got=0%o, expected=0%o}, $actual_mode, $expected_mode ) ) unless $expected_mode eq $actual_mode;
+    # Judged by the mode that stat gave, and readability by opening the thing,
+    # because the access bits cannot see an ACL or a read-only mount.
+    $die_no_trace->(qq{"$path" must be a directory that exists}) if $is_dir  && !( @stat && Fcntl::S_ISDIR( $stat[2] ) );
+    $die_no_trace->(qq{"$path" must be a file that exists})      if !$is_dir && !( @stat && Fcntl::S_ISREG( $stat[2] ) );
+    my $readable = 0;
+    my $handle;
+    if ($is_dir) {
+        $readable = opendir( $handle, $path ) && closedir($handle);
+    }
+    else {
+        $readable = open( $handle, '<', $path ) && close($handle);
+    }
+    $die_no_trace->(qq{"$path" could not be read}) if !$readable;
+
+    my $actual_mode = Fcntl::S_IMODE( $stat[2] );
+    $die_no_trace->( sprintf( qq{Permissions on "$path" are not correct: got=0%o, expected=0%o}, $actual_mode, $expected_mode ) ) if $expected_mode != $actual_mode;
     return 1;
 };
 
-my $resolve_login_method = sub {
+sub _resolve_login_method {
     my ($opts) = @_;
 
-    my $chosen = first { $opts->{$_} } qw{key_path password};
+    my $key_mode = oct('0600');
+    my $chosen   = first { $opts->{$_} } qw{key_path password};
     $chosen //= '';
-    undef $chosen          if $chosen eq 'key_path' && !$check_local_perms->( $opts->{'key_path'}, 0600 );
+    undef $chosen          if $chosen eq 'key_path' && !$check_local_perms->( $opts->{'key_path'}, $key_mode );
     return $chosen         if $chosen;
     return 'SSH_AUTH_SOCK' if $ENV{'SSH_AUTH_SOCK'};
     my $fallback_path = "$opts->{'home'}/.ssh/id";
@@ -137,27 +149,31 @@ my $resolve_login_method = sub {
     $opts->{'key_path'} = "${fallback_path}_${key_type}" if defined $key_type;
 
     $die_no_trace->('No key_path or password specified and no active SSH agent; cannot connect') if !$opts->{'key_path'};
-    $check_local_perms->( $opts->{'key_path'}, 0600 )                                            if $opts->{'key_path'};
+    $check_local_perms->( $opts->{'key_path'}, $key_mode )                                       if $opts->{'key_path'};
 
     return $opts->{'key_path'};
-};
+}
 
-my $get_dns_record_from_hostname = sub {
+sub _get_dns_record_from_hostname {
     my ( $hostname, $record_type ) = @_;
     $record_type ||= 'A';
 
     my $reply = Net::DNS::Resolver->new()->search( $hostname, $record_type );
     return unless $reply;
-    my %addresses = map { $_->type() => $_->address() } grep { $_->type eq $record_type } ( $reply->answer() );
+    my %addresses;
+    foreach my $record ( $reply->answer() ) {
+        next if $record->type() ne $record_type;
+        $addresses{ $record->type() } = $record->address();
+    }
     return %addresses ? \%addresses : undef;
-};
+}
 
 # Knock on the server till it responds, or doesn't. Try both ipv4 and ipv6.
-my $ping = sub {
+sub _ping {
     my ($opts) = @_;
 
     my $timeout = 30;
-    my ( $host_info, $ip, $r_type );
+    my ( $ip, $r_type );
     if ( my $ip_obj = Net::IP->new( $opts->{'host'} ) ) {
         $r_type = $ip_obj->ip_is_ipv4 ? 'A' : 'AAAA';
         $ip     = $opts->{'host'};
@@ -165,28 +181,49 @@ my $ping = sub {
     else {
         my $host_info;
         foreach my $type (qw{A AAAA}) {
-            $host_info = $get_dns_record_from_hostname->( $opts->{'host'}, $type );
+            $host_info = _get_dns_record_from_hostname( $opts->{'host'}, $type );
             last if $host_info;
         }
         $die_no_trace->("$opts->{'host'} does not resolve: DNS has no A or AAAA record for it") if !$host_info;
         ($r_type) = keys(%$host_info);
         $ip = $host_info->{$r_type};
     }
-    my %family_map = ( 'A' => 'INET', 'AAAA' => 'INET6' );
-    my $start      = time;
 
-    while ( ( time - $start ) <= $timeout ) {
-        return 1 if "IO::Socket::$family_map{$r_type}"->new(
+    my $start = Time::HiRes::time();
+
+    while ( ( Time::HiRes::time() - $start ) <= $timeout ) {
+        my @connect = (
             'PeerAddr' => $ip,
             'PeerPort' => $opts->{'port'},
             'Proto'    => 'tcp',
             'Timeout'  => $timeout,
         );
+
+        # Each class is named in full, so that the use lines above can be seen
+        # to use it.
+        my $socket = $r_type eq 'A' ? IO::Socket::INET->new(@connect) : IO::Socket::INET6->new(@connect);
+        return 1                                                                                         if $socket;
         diag( { '_opts' => $opts }, "[DEBUG] Waiting for response on $ip:$opts->{'port'} ($r_type)..." ) if $opts->{'debug'};
-        select undef, undef, undef, 0.5;    # there's no need to try more than 2 times per second
+        Time::HiRes::sleep(0.5);    # there's no need to try more than 2 times per second
     }
     return 0;
-};
+}
+
+# Runs the code with the destructor switched off, and puts the switch back as it
+# was afterwards, also when the code dies.  That is what a local of the variable
+# did, but a local on a package variable is something the profile prohibits.
+sub _without_destructor {
+    my ($code) = @_;
+
+    my $was = $disable_destructor;
+    $disable_destructor = 1;
+    my @result;
+    my $finished = eval { @result = $code->(); 1 };
+    my $error    = $@;
+    $disable_destructor = $was;
+    die $error if !$finished;
+    return wantarray ? @result : $result[0];
+}
 
 # Whether the machine on the other end is still there, which check_master alone
 # cannot answer: it asks the local master process, and that stays up and happy
@@ -214,8 +251,7 @@ $init_ssh = sub {
 
     # Always clear the cache if possible when we get here.
     if ( $opts->{'_cache_index'} ) {
-        local $disable_destructor = 1;
-        undef $cache{ $opts->{'_cache_index'} };
+        _without_destructor( sub { undef $cache{ $opts->{'_cache_index'} } } );
     }
 
     # Try not to have disallowed ENV chars. For now just transliterate . into _
@@ -245,6 +281,9 @@ $init_ssh = sub {
             # out what ssh said. A write-only handle answers readline with a
             # warning and undef, so the read was never going to work whatever
             # else was fixed around it.
+            # It stays open on purpose: the master process writes to it for as
+            # long as the connection lives, so there is no point to close it at.
+            ## no critic (InputOutput::RequireBriefOpen)
             open( $temp_fh, "+>", "$tmp_dir/STDERR" ) or $die_no_trace->("Can't open $tmp_dir/STDERR for reading and writing: $!");
             $opts->{'master_stderr_fh'} = $temp_fh;
         }
@@ -268,8 +307,8 @@ $init_ssh = sub {
         # with lockout after 3 tries and you have 4 keys in agent.
 
         # Anyways, don't just kill the sock for your bash session, restore it in DESTROY
-        $opts->{'_restore_auth_sock'} = delete $ENV{SSH_AUTH_SOCK} if $opts->{'no_agent'};
-        $opts->{'forward_agent'}      = 1                          if $ENV{'SSH_AUTH_SOCK'};
+        $opts->{'_restore_auth_sock'} = delete $ENV{'SSH_AUTH_SOCK'} if $opts->{'no_agent'};
+        $opts->{'forward_agent'}      = 1                            if $ENV{'SSH_AUTH_SOCK'};
     }
 
     my $status = 0;
@@ -282,7 +321,7 @@ $init_ssh = sub {
     my $said      = sub {
         my ( $why, $attempt ) = @_;
         $why =~ s/\s+/ /g;
-        $why =~ s/\A | \z//g;
+        $why =~ s/\A[ ]|[ ]\z//g;
         diag( { '_opts' => $opts }, "Attempt $attempt of $opts->{'retry_max'} to reach $opts->{'host'} failed: $why" ) if $why ne $last_said;
         $last_said = $why;
         return;
@@ -291,10 +330,10 @@ $init_ssh = sub {
 
         # Have to wait here: the `next` statements further down short-circuit
         # past the foot of the loop.
-        sleep $opts->{'retry_interval'} if $attempt > 1;
+        Time::HiRes::sleep( $opts->{'retry_interval'} ) if $attempt > 1;
 
         local $@;
-        my $up = $ping->($opts);
+        my $up = _ping($opts);
         if ( !$up ) {
             $die_no_trace->("$opts->{'host'} is down!") if $opts->{die_on_drop};
             $last_said = "nothing answered on port " . ( $opts->{'port'} // 22 );
@@ -340,9 +379,9 @@ $init_ssh = sub {
         # deciding whether to retry on it would retry every connection ever
         # made.  That is what $ssh_error is kept separate for.
         if ( $error && !$opts->{'retry_on_auth_failure'} ) {
-            $die_no_trace->("Bad password passed, will not retry SSH connection: $error.") if ( $error =~ m{bad password}                       && $opts->{'password'} );
-            $die_no_trace->("Bad key, will not retry SSH connection: $error.")             if ( $error =~ m{master process exited unexpectedly} && $opts->{'key_path'} );
-            $die_no_trace->("Bad credentials, will not retry SSH connection: $error.")     if ( $error =~ m{Permission denied} );
+            $die_no_trace->("Bad password passed, will not retry SSH connection: $error.") if ( index( $error, 'bad password' ) != -1                       && $opts->{'password'} );
+            $die_no_trace->("Bad key, will not retry SSH connection: $error.")             if ( index( $error, 'master process exited unexpectedly' ) != -1 && $opts->{'key_path'} );
+            $die_no_trace->("Bad credentials, will not retry SSH connection: $error.")     if ( index( $error, 'Permission denied' ) != -1 );
         }
 
         if ( ref $self ne 'Net::OpenSSH::More' || $ssh_error ) {
@@ -352,7 +391,7 @@ $init_ssh = sub {
         bless $self, $class if ref $self ne $class;
 
         if ( $status = $self->check_master() ) {
-            diag( { '_opts' => $opts }, "Successfully established connection to $opts->{'host'} on attempt #$attempt." ) if $attempt gt 1;
+            diag( { '_opts' => $opts }, "Successfully established connection to $opts->{'host'} on attempt #$attempt." ) if $attempt > 1;
             last;
         }
         $said->( 'the master connection did not answer a check', $attempt );
@@ -370,8 +409,7 @@ $init_ssh = sub {
         delete $opts->{'external_master'};
         delete $opts->{'ctl_path'};
 
-        local $disable_destructor = 1;
-        return $init_ssh->( $class, $opts );
+        return _without_destructor( sub { $init_ssh->( $class, $opts ) } );
     }
 
     # Publish this master's socket if nobody has yet.  _host_sock_key is given a
@@ -385,6 +423,10 @@ $init_ssh = sub {
     # it is also why this only happens when caching was asked for.
     if ( !$opts->{'no_cache'} && !$ENV{ $opts->{'_host_sock_key'} } ) {
         $self->{'master_pid'} = $self->disown_master();
+
+        # Not localized, because publishing the socket to whatever this program
+        # starts next is what this is for.
+        ## no critic (Variables::RequireLocalizedPunctuationVars)
         $ENV{ $opts->{'_host_sock_key'} } = $self->get_ctl_path();
     }
 
@@ -397,11 +439,10 @@ $init_ssh = sub {
 # Reconnects in place.  The caller holds $self and retries on it, so the new
 # master has to end up inside that object: assigning to $self here rebinds only
 # this sub's copy, and the retry then runs on the dead connection.
-my $connection_check = sub {
+sub _reconnect {
     my ($self) = @_;
-    return 1 if $self->check_master;
+
     local $@;
-    local $disable_destructor = 1;
     my $fresh = eval { $init_ssh->( ref $self, $self->{'_opts'} ) };
     return 0 if !$fresh;
 
@@ -416,6 +457,12 @@ my $connection_check = sub {
     %$fresh = ();
     $cache{ $self->{'_opts'}{'_cache_index'} } = $self if !$self->{'_opts'}{'no_cache'};
     return 1;
+}
+
+my $connection_check = sub {
+    my ($self) = @_;
+    return 1 if $self->check_master;
+    return _without_destructor( sub { _reconnect($self) } );
 };
 
 # Try calling the function.
@@ -442,20 +489,11 @@ my $call_ssh_reinit_if_check_fails = sub {
     return ( $self->$func(@args) );
 };
 
-my $post_connect = sub {
-    my ( $self, $opts ) = @_;
-
-    $self->{'persistent_shell'}->close() if $self->{'persistent_shell'};
-    undef $self->{'persistent_shell'};
-
-    return;
-};
-
 my $trim = sub {
     my ($string) = @_;
-    return '' unless length $string;
-    $string =~ s/^\s+//;
-    $string =~ s/\s+$//;
+    $string //= q{};
+    $string =~ s/\A\s+//;
+    $string =~ s/\s+\z//;
     return $string;
 };
 
@@ -470,7 +508,7 @@ my $send = sub {
     $self->{'_out'} = "";
     $line_reader = sub {
         my ( $self, $out, $stash_param ) = @_;
-        $out =~ s/[\r\n]{1,2}$//;
+        $out =~ s/[\r\n]{1,2}\z//;
         $self->{$stash_param} .= "$out\n";
         return;
       }
@@ -508,23 +546,23 @@ my $send_persistent_cmd = sub {
     # it is more straightforward to echo unique strings before and after the command.
     # This made getting the return code somewhat more complicated, as you can see below.
     # That said, it also makes you not have to worry about doing things asynchronously.
-    $self->{'expect'}->expect( $self->{'_opts'}{'expect_timeout'}, '-re', qr/BEGIN $uuid/m );
-    $self->{'expect'}->expect( $self->{'_opts'}{'expect_timeout'}, '-re', qr/EOF $uuid/m );     # If nothing is printed in timeout, give up
+    $self->{'expect'}->expect( $self->{'_opts'}{'expect_timeout'}, '-re', qr/BEGIN[ ]$uuid/m );
+    $self->{'expect'}->expect( $self->{'_opts'}{'expect_timeout'}, '-re', qr/EOF[ ]$uuid/m );     # If nothing is printed in timeout, give up
 
     # Get the actual output, remove terminal grunk
     my $message = $trim->( $self->{'expect'}->before() );
-    $message =~ s/[\r\n]{1,2}$//;                                                               # Remove 'secret newline' control chars
-    $message =~ s/\x{d}//g;                                                                     # More control chars
-    $message = Term::ANSIColor::colorstrip($message);                                           # Strip colors
+    $message =~ s/[\r\n]{1,2}\z//;                                                                # Remove 'secret newline' control chars
+    $message =~ s/\x{d}//g;                                                                       # More control chars
+    $message = Term::ANSIColor::colorstrip($message);                                             # Strip colors
 
     # Find the exit code
-    my ($code) = $message =~ m/___(\d*)___$/;
+    my ($code) = $message =~ m/___(\d*)___\z/;
     unless ( defined $code ) {
 
         # Tell the user if they've made a boo-boo
         my $possible_err = $trim->( $self->{'expect'}->before() );
         $possible_err =~ s/\s//g;
-        $die_no_trace->("Runaway multi-line string detected.  Please adjust the command passed.") if $possible_err =~ m/\>/;
+        $die_no_trace->("Runaway multi-line string detected.  Please adjust the command passed.") if index( $possible_err, '>' ) != -1;
 
         $die_no_trace->(
             "Could not determine exit code!
@@ -532,12 +570,12 @@ my $send_persistent_cmd = sub {
             Run command outside of the persistent terminal please."
         );
     }
-    $message =~ s/___(\d*)___$//g;
+    $message =~ s/___(\d*)___\z//;
 
     return ( $message, $code );
 };
 
-my $do_persistent_command = sub {
+sub _do_persistent_command {
     my ( $self, $command, $no_stderr ) = @_;
 
     if ( !$self->{'persistent_shell'} ) {
@@ -547,8 +585,8 @@ my $do_persistent_command = sub {
         # You might think that the below settings are important.
         # In most cases, they are not.
         $pty->set_raw();
-        $pty->stty( 'raw', 'icrnl', '-echo' );
-        $pty->slave->stty( 'raw', 'icrnl', '-echo' );
+        $pty->stty(qw{raw icrnl -echo});
+        $pty->slave->stty(qw{raw icrnl -echo});
 
         #Hook in expect
         $self->diag("[DEBUG][$self->{'_opts'}{'host'}] INIT expect on for PTY with pid $pid") if $self->{'_opts'}{'debug'};
@@ -583,7 +621,7 @@ my $do_persistent_command = sub {
     }
 
     return int($code);
-};
+}
 
 #######################
 # END PRIVATE METHODS #
@@ -734,16 +772,15 @@ sub new {
         my $cached = $cache{ $opts{'_cache_index'} };
         return $cached if $far_end_answers->($cached);
 
-        local $disable_destructor = 1;
-        delete $cache{ $opts{'_cache_index'} };
+        _without_destructor( sub { delete $cache{ $opts{'_cache_index'} } } );
     }
 
     # Figure out how we're gonna login
-    $opts{'_login_method'} = $resolve_login_method->( \%opts );
+    $opts{'_login_method'} = _resolve_login_method( \%opts );
 
     # check permissions on base files if we got here
-    $check_local_perms->( "$opts{'home'}/.ssh", 0700, 1 ) if -e "$opts{'home'}/.ssh";
-    $check_local_perms->( "$opts{'home'}/.ssh/config", 0600 ) if -e "$opts{'home'}/.ssh/config";
+    $check_local_perms->( "$opts{'home'}/.ssh", oct('0700'), 1 ) if -e "$opts{'home'}/.ssh";
+    $check_local_perms->( "$opts{'home'}/.ssh/config", oct('0600') ) if -e "$opts{'home'}/.ssh/config";
 
     # Make the connection
     my $self = $init_ssh->( $class, \%opts );
@@ -752,8 +789,9 @@ sub new {
     # Stash opts for later
     $self->{'_opts'} = \%opts;
 
-    # Establish persistent shell, etc.
-    $post_connect->( $self, \%opts );
+    # Start with no persistent shell, so that the first command makes one.
+    $self->{'persistent_shell'}->close() if $self->{'persistent_shell'};
+    undef $self->{'persistent_shell'};
 
     return $self;
 }
@@ -825,7 +863,7 @@ sub backup_files {
             if ( $self->sftp->test_e($file) ) {
 
                 # then back it up
-                $self->{'file_backups'}{$file} = time;
+                $self->{'file_backups'}{$file} = int( Time::HiRes::time() );
                 my $bkup = $file . '.' . $self->{'file_backups'}{$file};
                 $self->diag("[INFO] Backing up '$file' to '$bkup'");
                 $self->copy( $file, $bkup );    # XXX Probably not that portable, maybe move to Linux.pm somehow?
@@ -906,8 +944,11 @@ sub DESTROY {
     my ($self) = @_;
     return if !$self->{'_perl_pid'} || $$ != $self->{'_perl_pid'} || $disable_destructor;
     $self->restore_files();
-    $ENV{SSH_AUTH_SOCK} = $self->{'_opts'}{'_restore_auth_sock'} if $self->{'_opts'}{'_restore_auth_sock'};
-    $self->{'persistent_shell'}->close()                         if $self->{'persistent_shell'};
+
+    # Not localized: this puts back what new took out of the environment.
+    ## no critic (Variables::RequireLocalizedPunctuationVars)
+    $ENV{'SSH_AUTH_SOCK'} = $self->{'_opts'}{'_restore_auth_sock'} if $self->{'_opts'}{'_restore_auth_sock'};
+    $self->{'persistent_shell'}->close()                           if $self->{'persistent_shell'};
 
     return $self->SUPER::DESTROY();
 }
@@ -926,7 +967,7 @@ RETURNS undef.
 
 sub diag {
     my ( $self, @msgs ) = @_;
-    print STDOUT "$self->{'_opts'}{'output_prefix'}$_\n" for @msgs;
+    print {*STDOUT} "$self->{'_opts'}{'output_prefix'}$_\n" for @msgs;
     return;
 }
 
@@ -971,16 +1012,16 @@ In no_persist mode, stderr and stdout are merged, making the $err parameter retu
 =cut
 
 sub cmd {
-    my ($self)  = shift;
-    my $opts    = ref $_[0] eq 'HASH' ? shift : {};
-    my @command = @_;
+    my ( $self, @args ) = @_;
+    my $opts    = ref $args[0] eq 'HASH' ? shift @args : {};
+    my @command = @args;
 
     $die_no_trace->( 'No command specified', 'PEBCAK' ) if !@command;
 
     my $ret;
     $opts->{'use_persistent_shell'} = $self->{'_opts'}{'use_persistent_shell'} if !exists $opts->{'use_persistent_shell'};
     if ( $opts->{'use_persistent_shell'} ) {
-        $ret = $do_persistent_command->( $self, \@command, $opts->{'no_stderr'} );
+        $ret = _do_persistent_command( $self, \@command, $opts->{'no_stderr'} );
     }
     else {
         $ret = $send->( $self, undef, @command );
@@ -1029,7 +1070,7 @@ Returns true if all actions are successful, otherwise warn/die about the error.
 
 =cut
 
-sub write {
+sub write {    ## no critic (Subroutines::ProhibitBuiltinHomonyms, Subroutines::ProhibitManyArgs)
     my ( $self, $file, $content, $mode, $owner, $group ) = @_;
 
     die '[PARAMETER] No file specified'          if !defined $file;
@@ -1089,7 +1130,11 @@ sub eval_full {
     my $args = $options{args} // [];
     my $exe  = $options{exe} || '/usr/bin/perl';
 
-    require Storable;
+    # Storable, not JSON: a coderef has to cross over, and only Storable can
+    # deparse and recreate one.
+    require Storable;    ## no critic (PreferredModules)
+                         # Only this line names the variable, and a warning is fatal here.
+    no warnings 'once';
     local $Storable::Deparse = 1;
 
     my ( $in_fh, $out_fh, undef, $pid ) = $call_ssh_reinit_if_check_fails->(
@@ -1102,14 +1147,14 @@ sub eval_full {
     );
 
     die "Failed to connect: $!" unless ($pid);
-    print $in_fh $$ . "START_STORABLE" . unpack( "H*", Storable::freeze( { code => $code, args => $args, wantarray => wantarray() } ) ) . "STOP_STORABLE" . $$ . "\n";
-    close $in_fh;
+    print {$in_fh} $$ . "START_STORABLE" . unpack( "H*", Storable::freeze( { code => $code, args => $args, wantarray => wantarray() } ) ) . "STOP_STORABLE" . $$ . "\n";
+    close($in_fh) or die "Failed to close the input of the remote perl: $!";
 
     my $output = '';
     while ( $out_fh->sysread( $output, 4096, length($output) ) > 0 ) {
         1;
     }
-    close $out_fh;
+    close($out_fh) or die "Failed to close the output of the remote perl: $!";
     waitpid( $pid, 0 );
 
     my $result = { error => "Unable to deserialize output from remote_eval: $output" };
@@ -1141,15 +1186,18 @@ so if you want that, don't use this.
 
 sub cmd_stream {
     my ( $self, @cmd ) = @_;
-    my $line_reader = sub {
-        my ( $self, $out, $stash_param ) = @_;
-        $out =~ s/[\r\n]{1,2}$//;
-        $self->diag($out);
-        $self->{$stash_param} .= "$out\n";
+    return $send->(
+        $self,
+        sub {
+            my ( $self, $out, $stash_param ) = @_;
+            $out =~ s/[\r\n]{1,2}\z//;
+            $self->diag($out);
+            $self->{$stash_param} .= "$out\n";
 
-        return;
-    };
-    return $send->( $self, $line_reader, @cmd );
+            return;
+        },
+        @cmd
+    );
 }
 
 =head1 SPECIAL THANKS

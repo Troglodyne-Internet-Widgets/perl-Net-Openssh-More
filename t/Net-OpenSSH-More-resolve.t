@@ -1,5 +1,7 @@
+use 5.014;
 use strict;
 use warnings;
+use re '/aaxs';
 
 use Test2::V0;
 use Test2::Tools::Explain;
@@ -9,10 +11,6 @@ use Test::MockModule qw{strict};
 
 use Net::DNS;
 use Net::IP;
-
-use FindBin;
-
-use lib "$FindBin::Bin/../lib";
 
 use Net::OpenSSH::More;
 
@@ -27,7 +25,11 @@ sub resolver_mock {
             my ( $self, $name, $type ) = @_;
             my $records = $answers{"$name $type"} or return;
             my $packet  = Net::DNS::Packet->new( $name, $type );
-            $packet->push( 'answer' => map { Net::DNS::RR->new($_) } @$records );
+            my @answer;
+            foreach my $record (@$records) {
+                push @answer, Net::DNS::RR->new($record);
+            }
+            $packet->push( 'answer' => @answer );
             return $packet;
         },
     );
@@ -53,8 +55,9 @@ sub connect_to {
 subtest_streamed "a name with no record says that it does not resolve" => sub {
     my $mock = resolver_mock();
     my $died = connect_to('nothing.test.test');
-    like( $died, qr/nothing\.test\.test does not resolve/, "Named the host and said it does not resolve" ) or diag explain $died;
-    like( $died, qr/\bA\b.*\bAAAA\b/,                      "Said which record types were asked for" );
+    like( $died, qr/nothing\.test\.test\ does\ not\ resolve/, "Named the host and said it does not resolve" ) or diag explain $died;
+    like( $died, qr/\bA\b.*\bAAAA\b/,                         "Said which record types were asked for" );
+    $mock->unmock_all();
 };
 
 subtest_streamed "a name whose A answer is only a CNAME to an IPv6-only name falls through to AAAA" => sub {
@@ -72,6 +75,10 @@ subtest_streamed "a name whose A answer is only a CNAME to an IPv6-only name fal
 
     is( $died,                                 "knocked\n",   "Got as far as the knock, rather than giving up on the name" ) or diag explain $died;
     is( $peer && Net::IP->new($peer)->short(), '2001:db8::1', "Knocked on the AAAA address" );
+    $knock->unmock_all();
+    $mock->unmock_all();
 };
 
 done_testing();
+
+1;

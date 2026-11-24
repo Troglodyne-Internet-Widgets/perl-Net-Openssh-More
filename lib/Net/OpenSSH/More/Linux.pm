@@ -2,12 +2,16 @@ package Net::OpenSSH::More::Linux;
 
 #ABSTRACT: Useful subcommands for linux machines
 
+use 5.014;
 use strict;
-use warnings;
+use warnings FATAL => 'all';
+use re '/aaxs';
+no autovivification;
 
 use parent 'Net::OpenSSH::More';
 
-use File::Slurper ();
+use File::Slurper       ();
+use IPC::System::Simple ();
 
 =head1 NAME
 
@@ -35,8 +39,10 @@ my $get_addrs_for_iface = sub {
     $self->diag("Attempting to get $proto address for interface $interface");
     my $regex = $proto eq 'inet' ? '[\d\.]+' : '[\da-f:]+';    # Close enough
 
-    my $cmd     = "ip -f $proto addr show $interface scope global dynamic";
-    my $ip      = $use_local ? `$cmd` : $self->cmd($cmd);
+    my @cmd = ( 'ip', '-f', $proto, 'addr', 'show', $interface, qw{scope global dynamic} );
+
+    # The list form, so that no shell sees the interface name.
+    my $ip      = $use_local ? IPC::System::Simple::capturex( [ 0 .. 255 ], @cmd ) : $self->cmd( join q{ }, @cmd );
     my @matches = $ip =~ m/$proto\s+($regex)/g;
     return @matches;
 };
@@ -68,14 +74,21 @@ sub get_primary_adapter {
     my ( $self, $use_local ) = @_;
     my %interfaces;
     my $proc_route_path = $use_local ? File::Slurper::read_text('/proc/net/route') : $self->sftp->get_content('/proc/net/route');
-    foreach my $line ( split( /\n/, $proc_route_path ) ) {
 
-        #                                        Iface   Destination   Gateway       Flags RefCt Use   Metric  Mask          MTU   Wndow IRTT
-        my ( $interface, $metric ) = $line =~ m/^(.+?)\s+[0-9A-F]{8}\s+[0-9A-F]{8}\s+\d+\s+\d+\s+\d+\s+(\d+)\s+[0-9A-F]{8}\s+\d+\s+\d+\s+\d+\s*$/;
-        push @{ $interfaces{$metric} }, $interface if ( length $interface && defined $metric );
+    # One line of /proc/net/route, in pieces.  The columns are:
+    # Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT
+    my $address = qr/[[:xdigit:]]{8}/;
+    my $count   = qr/\d+/;
+    my $columns = qr/\A (.+?) \s+ $address \s+ $address \s+ $count \s+ $count \s+ $count \s+ ($count) \s+/;
+    my $tail    = qr/$address \s+ $count \s+ $count \s+ $count \s*\z/;
+
+    foreach my $line ( split( /\n/, $proc_route_path ) ) {
+        my ( $interface, $metric ) = $line =~ m/$columns $tail/;
+        push @{ $interfaces{$metric} }, $interface if defined $metric && $interface;
     }
     my $lowest_metric = ( sort keys %interfaces )[0];
-    my $interface     = $interfaces{$lowest_metric}->[0] if defined $lowest_metric && $interfaces{$lowest_metric};
+    my $interface;
+    $interface = $interfaces{$lowest_metric}->[0] if defined $lowest_metric && $interfaces{$lowest_metric};
     return $interface || 'eth0';
 }
 
