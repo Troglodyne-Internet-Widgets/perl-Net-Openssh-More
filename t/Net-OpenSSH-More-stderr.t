@@ -9,9 +9,13 @@ use Test2::Tools::Subtest qw{subtest_streamed};
 use Test2::Plugin::NoWarnings;
 use Test::MockModule qw{strict};
 
+use File::Temp ();
 use IO::Socket::INET;
 
 use Net::OpenSSH::More;
+
+# A home of its own, so that the ~/.ssh of whoever runs this is never read.
+my $home = File::Temp::tempdir( 'CLEANUP' => 1 );
 
 # The handle opened to catch the ssh master's stderr is handed down by name,
 # and the name was spelled master_sdterr_fh in the list of things forwarded to
@@ -45,6 +49,7 @@ subtest_streamed "the master's stderr handle is forwarded to Net::OpenSSH" => su
     my $obj = Net::OpenSSH::More->new(
         'host'      => '127.0.0.1',
         'port'      => $listener->sockport(),
+        'home'      => $home,
         'password'  => 'mock',
         'retry_max' => 1,
         'no_cache'  => 1,

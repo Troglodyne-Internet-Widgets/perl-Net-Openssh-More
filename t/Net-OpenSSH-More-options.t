@@ -9,9 +9,13 @@ use Test2::Tools::Subtest qw{subtest_streamed};
 use Test2::Plugin::NoWarnings;
 use Test::MockModule qw{strict};
 
+use File::Temp ();
 use IO::Socket::INET;
 
 use Net::OpenSSH::More;
+
+# A home of its own, so that the ~/.ssh of whoever runs this is never read.
+my $home = File::Temp::tempdir( 'CLEANUP' => 1 );
 
 # Net::OpenSSH::More makes the control directory in TMPDIR and turns off
 # strict_mode, because TMPDIR can have a parent that the group may write.
@@ -40,6 +44,7 @@ subtest_streamed "an option of 0 reaches Net::OpenSSH" => sub {
     my $obj = Net::OpenSSH::More->new(
         'host'       => '127.0.0.1',
         'port'       => $listener->sockport(),
+        'home'       => $home,
         'password'   => 'mock',
         'batch_mode' => 0,
         'timeout'    => 0,
@@ -78,6 +83,7 @@ subtest_streamed "each attempt gets a short control socket of its own" => sub {
     my $obj = Net::OpenSSH::More->new(
         'host'      => '127.0.0.1',
         'port'      => $listener->sockport(),
+        'home'      => $home,
         'password'  => 'mock',
         'retry_max' => 2,
         'no_cache'  => 1,

@@ -9,10 +9,14 @@ use Test2::Tools::Subtest qw{subtest_streamed};
 use Test2::Plugin::NoWarnings;
 use Test::MockModule qw{strict};
 
+use File::Temp ();
 use Net::DNS;
 use Net::IP;
 
 use Net::OpenSSH::More;
+
+# A home of its own, so that the ~/.ssh of whoever runs this is never read.
+my $home = File::Temp::tempdir( 'CLEANUP' => 1 );
 
 # A resolver that answers from a table instead of the network. A name and type
 # missing from the table gets what Net::DNS::Resolver::search gives for a name
@@ -45,6 +49,7 @@ sub connect_to {
     return dies {
         Net::OpenSSH::More->new(
             'host'      => $host,
+            'home'      => $home,
             'password'  => 'mock',
             'retry_max' => 1,
             'no_cache'  => 1,

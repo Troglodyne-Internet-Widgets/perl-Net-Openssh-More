@@ -12,8 +12,12 @@ use Test::MockModule qw{strict};
 use IO::Socket::INET;
 use POSIX();
 use Capture::Tiny();
+use File::Temp ();
 
 use Net::OpenSSH::More;
+
+# A home of its own, so that the ~/.ssh of whoever runs this is never read.
+my $home = File::Temp::tempdir( 'CLEANUP' => 1 );
 
 # A machine that reboots takes the master with it.  The library opens a new
 # master when a command finds the old one gone, and the command has to run on
@@ -62,6 +66,7 @@ subtest_streamed "a command after the master died runs on a new master, in the s
     my $obj = Net::OpenSSH::More->new(
         'host'                 => '127.0.0.1',
         'port'                 => $listener->sockport(),
+        'home'                 => $home,
         'password'             => 'mock',
         'retry_max'            => 2,
         'retry_interval'       => 0,
