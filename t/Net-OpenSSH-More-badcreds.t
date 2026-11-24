@@ -1,17 +1,14 @@
+use 5.014;
 use strict;
 use warnings;
+use re '/aaxs';
 
 use Test2::V0;
-use Test2::Tools::Explain;
 use Test2::Tools::Subtest qw{subtest_streamed};
 use Test2::Plugin::NoWarnings;
 use Test::MockModule qw{strict};
 
 use IO::Socket::INET;
-
-use FindBin;
-
-use lib "$FindBin::Bin/../lib";
 
 use Net::OpenSSH::More;
 
@@ -66,8 +63,9 @@ subtest_streamed "a refused credential is not retried by default" => sub {
         );
     };
 
-    like( $died, qr/Bad credentials, will not retry/, "Gave up naming the credential as the reason" );
+    like( $died, qr/Bad\ credentials,\ will\ not\ retry/, "Gave up naming the credential as the reason" );
     is( $attempts, 1, "Stopped after the first refusal rather than spending all five attempts" );
+    $mock->unmock_all();
 };
 
 subtest_streamed "retry_on_auth_failure spends the attempts instead" => sub {
@@ -90,8 +88,11 @@ subtest_streamed "retry_on_auth_failure spends the attempts instead" => sub {
         );
     };
 
-    like( $died, qr/Failed to establish SSH connection after 3 attempts/, "Ran out of attempts rather than refusing to make them" );
+    like( $died, qr/Failed\ to\ establish\ SSH\ connection\ after\ 3\ attempts/, "Ran out of attempts rather than refusing to make them" );
     is( $attempts, 3, "Made all three attempts" );
+    $mock->unmock_all();
 };
 
 done_testing();
+
+1;

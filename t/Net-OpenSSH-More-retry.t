@@ -1,20 +1,26 @@
+use 5.014;
 use strict;
 use warnings;
+use re '/aaxs';
+no autovivification;
 
 use Test2::V0;
-use Test2::Tools::Explain;
 use Test2::Tools::Subtest qw{subtest_streamed};
 use Test2::Plugin::NoWarnings;
 use Test::MockModule qw{strict};
 
 use IO::Socket::INET;
 use Capture::Tiny();
-
-use FindBin;
-
-use lib "$FindBin::Bin/../lib";
+use Time::HiRes();
 
 use Net::OpenSSH::More;
+
+# Whether $got holds $wanted as written.  A regex would need every space of the
+# message escaped.
+sub contains {
+    my ( $got, $wanted ) = @_;
+    return index( $got, $wanted ) != -1;
+}
 
 # A connection that comes back with an error is taken by a `next` inside the
 # retry loop, so anything sitting at the foot of that loop never runs for it.
@@ -45,15 +51,10 @@ subtest_streamed "retry_interval is waited out between attempts" => sub {
         # is the interval between attempts rather than which failures earn one.
         'error'        => sub { return $attempts <= 2 ? 'master would not come up' : 0; },
         'check_master' => sub { return $attempts > 2; },
+        'DESTROY'      => sub { undef },
     );
-    {
-        # MockModule can't redefine destructors properly, as the mock goes out
-        # of scope along with the thing it is mocking.
-        no warnings qw{redefine};
-        *Net::OpenSSH::DESTROY = sub { undef };
-    }
 
-    my $start = time;
+    my $start = Time::HiRes::time();
     my $obj   = Net::OpenSSH::More->new(
         'host'           => '127.0.0.1',
         'port'           => $listener->sockport(),
@@ -62,7 +63,7 @@ subtest_streamed "retry_interval is waited out between attempts" => sub {
         'retry_interval' => 1,
         'no_cache'       => 1,
     );
-    my $elapsed = time - $start;
+    my $elapsed = int( Time::HiRes::time() - $start );
 
     is( ref $obj,  'Net::OpenSSH::More', "Retried a rejected connection rather than burning every attempt at once" );
     is( $attempts, 3,                    "Connected on the third attempt" );
@@ -93,11 +94,8 @@ subtest_streamed "each failed attempt says why, and the last reason is in the er
         'new'          => sub { $attempts++; return bless {}, $_[0]; },
         'error'        => sub { return $errors[ $attempts - 1 ]; },
         'check_master' => sub { return 0; },
+        'DESTROY'      => sub { undef },
     );
-    {
-        no warnings qw{redefine};
-        *Net::OpenSSH::DESTROY = sub { undef };
-    }
 
     my $died;
     my $said = Capture::Tiny::capture_stdout(
@@ -117,11 +115,13 @@ subtest_streamed "each failed attempt says why, and the last reason is in the er
     );
 
     is( $attempts, 3, "Tried every attempt" );
-    my @lines = grep { m/failed:/ } split( m/\n/, $said );
+    my @lines = grep { index( $_, 'failed:' ) != -1 } split( m/\n/, $said );
     is( scalar @lines, 2, "Said why twice, once for each reason, not once for each attempt" ) or diag $said;
-    like( $lines[0], qr/Attempt 1 of 3 to reach 127\.0\.0\.1 failed: Permission denied \(publickey\)\./, "Said the first reason with its attempt" );
-    like( $lines[1], qr/Attempt 3 of 3 .* failed: Connection reset by peer/,                             "and the one that changed, on one line" );
-    like( $died,     qr/after 3 attempts\.  The last attempt said: Connection reset by peer\./,          "The error says the last reason" );
+    ok( contains( $lines[0], 'Attempt 1 of 3 to reach 127.0.0.1 failed: Permission denied (publickey).' ), "Said the first reason with its attempt" ) or diag $lines[0];
+    ok( contains( $lines[1], 'Attempt 3 of 3 to reach 127.0.0.1 failed: Connection reset by peer' ),       "and the one that changed, on one line" )  or diag $lines[1];
+    ok( contains( $died,     'after 3 attempts.  The last attempt said: Connection reset by peer.' ),      "The error says the last reason" )         or diag $died;
 };
 
 done_testing();
+
+1;

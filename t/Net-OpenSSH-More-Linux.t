@@ -1,15 +1,12 @@
+use 5.014;
 use strict;
 use warnings;
+use re '/aaxs';
 
 use Test2::V0;
-use Test2::Tools::Explain;
 use Test2::Tools::Subtest qw{subtest_streamed};
 use Test2::Plugin::NoWarnings;
 use Test::MockModule qw{strict};
-
-use FindBin;
-
-use lib "$FindBin::Bin/../lib";
 
 use Net::OpenSSH::More::Linux;
 
@@ -57,3 +54,5 @@ subtest_streamed "Common tests using mocks" => sub {
 };
 
 done_testing();
+
+1;

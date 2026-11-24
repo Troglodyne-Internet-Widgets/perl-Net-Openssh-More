@@ -1,17 +1,15 @@
+use 5.014;
 use strict;
 use warnings;
+use re '/aaxs';
+no autovivification;
 
 use Test2::V0;
-use Test2::Tools::Explain;
 use Test2::Tools::Subtest qw{subtest_streamed};
 use Test2::Plugin::NoWarnings;
 use Test::MockModule qw{strict};
 
 use IO::Socket::INET;
-
-use FindBin;
-
-use lib "$FindBin::Bin/../lib";
 
 use Net::OpenSSH::More;
 
@@ -52,11 +50,8 @@ subtest_streamed "a cached object that still answers is handed back" => sub {
         'test'          => sub { return 1; },
         'disown_master' => sub { return 4242; },
         'get_ctl_path'  => sub { return '/tmp/bogus-ctl-path-for-testing'; },
+        'DESTROY'       => sub { undef },
     );
-    {
-        no warnings qw{redefine};
-        *Net::OpenSSH::DESTROY = sub { undef };
-    }
 
     my $cached = bless {}, 'Net::OpenSSH::More';
     $Net::OpenSSH::More::cache{ cache_key($port) } = $cached;
@@ -95,12 +90,9 @@ subtest_streamed "a cached object whose far end has gone is not" => sub {
         # point: check_master cannot tell these two apart. A bare return is
         # undef in the scalar context it is asked in, which is what
         # Net::OpenSSH::test answers with when the connection is the problem.
-        'test' => sub { return; },
+        'test'    => sub { return; },
+        'DESTROY' => sub { undef },
     );
-    {
-        no warnings qw{redefine};
-        *Net::OpenSSH::DESTROY = sub { undef };
-    }
 
     my $cached = bless {}, 'Net::OpenSSH::More';
     $Net::OpenSSH::More::cache{ cache_key($port) } = $cached;
@@ -134,11 +126,8 @@ subtest_streamed "the master's socket is published for children to reuse" => sub
         'test'          => sub { return 1; },
         'disown_master' => sub { return 4242; },
         'get_ctl_path'  => sub { return '/tmp/bogus-ctl-path-for-testing'; },
+        'DESTROY'       => sub { undef },
     );
-    {
-        no warnings qw{redefine};
-        *Net::OpenSSH::DESTROY = sub { undef };
-    }
 
     my $got = Net::OpenSSH::More->new(
         'host'     => '127.0.0.1',
@@ -152,3 +141,5 @@ subtest_streamed "the master's socket is published for children to reuse" => sub
 };
 
 done_testing();
+
+1;
