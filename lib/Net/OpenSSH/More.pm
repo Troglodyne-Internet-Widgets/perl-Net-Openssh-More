@@ -111,8 +111,13 @@ my $die_no_trace = sub {
     die "[$summary] ${full_msg}${carp}";
 };
 
+# The bits that ssh refuses: write by group or other on ~/.ssh and its config,
+# and any access by group or other on a private key.
+my $writable_by_others = Fcntl::S_IWGRP() | Fcntl::S_IWOTH();
+my $usable_by_others   = Fcntl::S_IRWXG() | Fcntl::S_IRWXO();
+
 my $check_local_perms = sub {
-    my ( $path, $expected_mode, $is_dir ) = @_;
+    my ( $path, $forbidden_bits, $is_dir ) = @_;
     $is_dir //= 0;
     my @stat = stat($path);
 
@@ -131,17 +136,17 @@ my $check_local_perms = sub {
     $die_no_trace->(qq{"$path" could not be read}) if !$readable;
 
     my $actual_mode = Fcntl::S_IMODE( $stat[2] );
-    $die_no_trace->( sprintf( qq{Permissions on "$path" are not correct: got=0%o, expected=0%o}, $actual_mode, $expected_mode ) ) if $expected_mode != $actual_mode;
+    my $bad_bits    = $actual_mode & $forbidden_bits;
+    $die_no_trace->( sprintf( q{Permissions on "%s" are too open: mode is %04o, and its bits %04o are not allowed (ssh refuses any bit of %04o)}, $path, $actual_mode, $bad_bits, $forbidden_bits ) ) if $bad_bits;
     return 1;
 };
 
 sub _resolve_login_method {
     my ($opts) = @_;
 
-    my $key_mode = oct('0600');
-    my $chosen   = first { $opts->{$_} } qw{key_path password};
+    my $chosen = first { $opts->{$_} } qw{key_path password};
     $chosen //= '';
-    undef $chosen          if $chosen eq 'key_path' && !$check_local_perms->( $opts->{'key_path'}, $key_mode );
+    undef $chosen          if $chosen eq 'key_path' && !$check_local_perms->( $opts->{'key_path'}, $usable_by_others );
     return $chosen         if $chosen;
     return 'SSH_AUTH_SOCK' if $ENV{'SSH_AUTH_SOCK'};
     my $fallback_path = "$opts->{'home'}/.ssh/id";
@@ -149,7 +154,7 @@ sub _resolve_login_method {
     $opts->{'key_path'} = "${fallback_path}_${key_type}" if defined $key_type;
 
     $die_no_trace->('No key_path or password specified and no active SSH agent; cannot connect') if !$opts->{'key_path'};
-    $check_local_perms->( $opts->{'key_path'}, $key_mode )                                       if $opts->{'key_path'};
+    $check_local_perms->( $opts->{'key_path'}, $usable_by_others )                               if $opts->{'key_path'};
 
     return $opts->{'key_path'};
 }
@@ -750,6 +755,19 @@ enabled which monitors and blocks access based on failed login attempts. If this
 ensure that you have not configured things in a way as to accidentally lock yourself out
 of the remote host just because you fatfingered a connection detail in the constructor.
 
+=head3 A note on file permissions
+
+Before it connects, new() checks the permissions of the files that ssh will read.
+It uses the same rule as ssh, so a mode that ssh accepts is accepted here too.
+It dies, and names the file, its mode and the bits that are not allowed, if:
+
+1) The .ssh directory in the home directory can be written by the group or by others (mode & 022).
+2) The .ssh/config file can be written by the group or by others (mode & 022).
+3) The private key can be read, written or run by the group or by others (mode & 077).
+
+So a .ssh directory of 0700, 0710, 0750 or 0755 is accepted, and so is a config of 0644.
+A key must be 0600, 0400 or stricter.
+
 =cut
 
 sub new {
@@ -779,8 +797,8 @@ sub new {
     $opts{'_login_method'} = _resolve_login_method( \%opts );
 
     # check permissions on base files if we got here
-    $check_local_perms->( "$opts{'home'}/.ssh", oct('0700'), 1 ) if -e "$opts{'home'}/.ssh";
-    $check_local_perms->( "$opts{'home'}/.ssh/config", oct('0600') ) if -e "$opts{'home'}/.ssh/config";
+    $check_local_perms->( "$opts{'home'}/.ssh", $writable_by_others, 1 ) if -e "$opts{'home'}/.ssh";
+    $check_local_perms->( "$opts{'home'}/.ssh/config", $writable_by_others ) if -e "$opts{'home'}/.ssh/config";
 
     # Make the connection
     my $self = $init_ssh->( $class, \%opts );

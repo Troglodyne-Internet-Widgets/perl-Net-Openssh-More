@@ -9,9 +9,13 @@ use Test2::Tools::Subtest qw{subtest_streamed};
 use Test2::Plugin::NoWarnings;
 use Test::MockModule qw{strict};
 
+use File::Temp ();
 use IO::Socket::INET;
 
 use Net::OpenSSH::More;
+
+# A home of its own, so that the ~/.ssh of whoever runs this is never read.
+my $home = File::Temp::tempdir( 'CLEANUP' => 1 );
 
 # Nothing ever accepts these, so the backlog has to outlast every attempt the
 # subtests make between them, or the connects stall on retransmit instead of
@@ -59,6 +63,7 @@ subtest_streamed "a cached object that still answers is handed back" => sub {
     my $got = Net::OpenSSH::More->new(
         'host'     => '127.0.0.1',
         'port'     => $port,
+        'home'     => $home,
         'password' => 'mock',
     );
 
@@ -100,6 +105,7 @@ subtest_streamed "a cached object whose far end has gone is not" => sub {
     my $got = Net::OpenSSH::More->new(
         'host'     => '127.0.0.1',
         'port'     => $port,
+        'home'     => $home,
         'password' => 'mock',
     );
 
@@ -132,6 +138,7 @@ subtest_streamed "the master's socket is published for children to reuse" => sub
     my $got = Net::OpenSSH::More->new(
         'host'     => '127.0.0.1',
         'port'     => $port,
+        'home'     => $home,
         'password' => 'mock',
     );
 

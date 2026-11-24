@@ -12,8 +12,12 @@ use Test::MockModule qw{strict};
 use IO::Socket::INET;
 use Capture::Tiny();
 use Time::HiRes();
+use File::Temp ();
 
 use Net::OpenSSH::More;
+
+# A home of its own, so that the ~/.ssh of whoever runs this is never read.
+my $home = File::Temp::tempdir( 'CLEANUP' => 1 );
 
 # Whether $got holds $wanted as written.  A regex would need every space of the
 # message escaped.
@@ -58,6 +62,7 @@ subtest_streamed "retry_interval is waited out between attempts" => sub {
     my $obj   = Net::OpenSSH::More->new(
         'host'           => '127.0.0.1',
         'port'           => $listener->sockport(),
+        'home'           => $home,
         'password'       => 'mock',
         'retry_max'      => 5,
         'retry_interval' => 1,
@@ -104,6 +109,7 @@ subtest_streamed "each failed attempt says why, and the last reason is in the er
                 Net::OpenSSH::More->new(
                     'host'                  => '127.0.0.1',
                     'port'                  => $listener->sockport(),
+                    'home'                  => $home,
                     'password'              => 'mock',
                     'retry_max'             => 3,
                     'retry_interval'        => 0,

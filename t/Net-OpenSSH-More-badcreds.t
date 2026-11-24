@@ -8,9 +8,13 @@ use Test2::Tools::Subtest qw{subtest_streamed};
 use Test2::Plugin::NoWarnings;
 use Test::MockModule qw{strict};
 
+use File::Temp ();
 use IO::Socket::INET;
 
 use Net::OpenSSH::More;
+
+# A home of its own, so that the ~/.ssh of whoever runs this is never read.
+my $home = File::Temp::tempdir( 'CLEANUP' => 1 );
 
 # Each attempt insists on a real TCP connect before it will try to
 # authenticate, and the thing that does it is a lexical closure with no way in.
@@ -57,6 +61,7 @@ subtest_streamed "a refused credential is not retried by default" => sub {
         Net::OpenSSH::More->new(
             'host'      => '127.0.0.1',
             'port'      => $listener->sockport(),
+            'home'      => $home,
             'password'  => 'mock',
             'retry_max' => 5,
             'no_cache'  => 1,
@@ -80,6 +85,7 @@ subtest_streamed "retry_on_auth_failure spends the attempts instead" => sub {
         Net::OpenSSH::More->new(
             'host'                  => '127.0.0.1',
             'port'                  => $listener->sockport(),
+            'home'                  => $home,
             'password'              => 'mock',
             'retry_max'             => 3,
             'retry_interval'        => 0,

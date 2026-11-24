@@ -8,9 +8,13 @@ use Test2::Tools::Subtest qw{subtest_streamed};
 use Test2::Plugin::NoWarnings;
 use Test::MockModule qw{strict};
 
+use File::Temp ();
 use IO::Socket::INET;
 
 use Net::OpenSSH::More;
+
+# A home of its own, so that the ~/.ssh of whoever runs this is never read.
+my $home = File::Temp::tempdir( 'CLEANUP' => 1 );
 
 subtest_streamed "Live tests versus localhost" => sub {
     plan 'skip_all' => 'AUTHOR_TESTS not set in shell environment, skipping...' if !$ENV{'AUTHOR_TESTS'};
@@ -56,7 +60,7 @@ subtest_streamed "Common tests using mocks" => sub {
         'check_master' => 1,
         'DESTROY'      => sub { undef },
     );
-    my $obj = Net::OpenSSH::More->new( 'host' => '127.0.0.1', retry_max => 1, 'port' => $listener->sockport(), 'output_prefix' => '# ', 'password' => 'mock' );
+    my $obj = Net::OpenSSH::More->new( 'host' => '127.0.0.1', retry_max => 1, 'port' => $listener->sockport(), 'output_prefix' => '# ', 'home' => $home, 'password' => 'mock' );
     is( ref $obj,           'Net::OpenSSH::More', "Got right ref type for object upon instantiation" );
     is( $obj->diag("Whee"), undef,                "You should see whee before this subtest" );
 };
