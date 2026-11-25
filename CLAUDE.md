@@ -20,4 +20,22 @@ Most of the code here is older than the conversation about it. A line that looks
 
 The files `.perlcriticrc` and `.perltidyrc` set the style. The pre-commit hook in `git-hooks/` enforces both. Turn a policy off only with a comment that gives the reason. Do not turn one off to make a commit pass.
 
+## Set up a clone
+
+`dzil` builds the distribution. `dist.ini` lists what the build needs, and the code says what the modules need. Install both with `cpanm`:
+
+```
+dzil authordeps --missing | cpanm --notest
+dzil listdeps --missing | cpanm --notest
+```
+
+In each clone that you commit from, install the hooks once. Git does not install them for you:
+
+```
+cp git-hooks/pre-commit git-hooks/post-commit git-hooks/post-merge \
+   git-hooks/post-rewrite git-hooks/refresh-coverage .git/hooks/
+```
+
+## Tests
+
 Run the tests with `prove -lm -j8 t/`. A test must not need a real ssh server. A test that needs one skips unless `AUTHOR_TESTS` is set.
