@@ -42,7 +42,7 @@ my $get_addrs_for_iface = sub {
     my @cmd = ( 'ip', '-f', $proto, 'addr', 'show', $interface, qw{scope global dynamic} );
 
     # The list form, so that no shell sees the interface name.
-    my $ip      = $use_local ? IPC::System::Simple::capturex( [ 0 .. 255 ], @cmd ) : $self->cmd( join q{ }, @cmd );
+    my $ip      = $use_local ? IPC::System::Simple::capturex( [ 0 .. 255 ], @cmd ) : ( $self->cmd(@cmd) )[0];
     my @matches = $ip =~ m/$proto\s+($regex)/g;
     return @matches;
 };
