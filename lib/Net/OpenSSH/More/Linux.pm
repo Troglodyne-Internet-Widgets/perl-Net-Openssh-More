@@ -51,9 +51,9 @@ my $get_addrs_for_iface = sub {
 # END PRIVATE METHODS #
 #######################
 
-=head2 METHODS
+=head1 METHODS
 
-=head3 B<get_primary_adapter>
+=head2 get_primary_adapter($use_local)
 
 So, on linux, there's no "primary" adapter, just the "correct" adapter
 for whatever given route. As such, what's the best way to determine
@@ -65,8 +65,16 @@ as the lower the cost, the higher the preference.
 If you have set the metric improperly, you'll get bad results, but that's
 nothing to do with the code here.
 
-Optionally accepts a truthy arg to indicate whether you want this for the
-local host instead of the remote host.
+=over 4
+
+=item use_local - Bool - optional: true for the local host instead of the remote host
+
+=back
+
+Returns Str, the name of the interface, or C<eth0> when no route names one.
+Dies when the route table cannot be read.
+
+    my $interface = $ssh->get_primary_adapter();
 
 =cut
 
@@ -100,6 +108,8 @@ If no interfaces is provided, use the default interface.
 CAVEATS: This uses the 'ip' tool, so if your system is too old for this, perhaps consider
 writing your own getter for local IPs.
 
+    my %ips = $ssh->get_remote_ips('eth0');
+
 =cut
 
 sub get_remote_ips {
@@ -117,6 +127,9 @@ If no interfaces is provided, use the default interface.
 This one fetches it from the local machine and not the remote host, as sometimes
 that can be useful (say in the context of a test where you need this info).
 Same caveats that exist for get_remote_ips apply here.
+Dies when C<ip> cannot be run.
+
+    my %ips = $ssh->get_local_ips();
 
 =cut
 
@@ -128,9 +141,21 @@ sub get_local_ips {
     );
 }
 
-=head2 copy
+=head2 copy($SOURCE, $DEST)
 
-Effectively the same thing as `cp $SOURCE $DEST` on the remote server.
+Effectively the same thing as `cp -a $SOURCE $DEST` on the remote server.
+
+=over 4
+
+=item SOURCE - Str - the path of the file to copy
+
+=item DEST - Str - the path of the copy
+
+=back
+
+Returns the list that C<cmd> returns: STDOUT, STDERR and the exit code of C<cp>.
+
+    $ssh->copy( '/etc/hosts', '/etc/hosts.orig' );
 
 =cut
 

@@ -1,0 +1,16 @@
+# The packages of the operating system that the distribution needs.
+# [MetaMergeFile] merges this file into META.json.  perldoc
+# Dist::Conformance::Check::SystemPackages gives the rules.
+x_system_packages:
+  # Documentation::PodSpelling runs aspell over the POD, with the
+  # spell_command of .perlcriticrc.  Without aspell, the policy turns itself
+  # off, and the spelling of the POD is not checked.
+  aspell:
+    deb: aspell
+    rpm: aspell
+    test: aspell --version
+  # The dictionary of the --lang of that spell_command.
+  aspell-en:
+    deb: aspell-en
+    rpm: aspell-en
+    test: aspell --lang=en_US -a

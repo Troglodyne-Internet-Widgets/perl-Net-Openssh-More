@@ -71,7 +71,11 @@ strict = 1
 [ValuesAndExpressions::ProhibitDescendingRanges]
 [Bangs::ProhibitUselessRegexModifiers]
 [RegularExpressions::ProhibitIneffectiveModifiers]
+# The @example tag of a blurb that Pod::Coverage::More::Blurb reads is code in a
+# comment on purpose: the generated POD shows it as the example of the sub.
+# The pattern is the default of the policy, anchored, and refusing those lines.
 [Bangs::ProhibitCommentedOutCode]
+commentedcoderegex = \A(?!\#\s*\@example\b).*\$[A-Za-z_].*=
 [Tics::ProhibitUseBase]
 [Plicease::ProhibitLeadingZeros]
 [RegularExpressions::ProhibitEmptyAlternatives]

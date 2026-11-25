@@ -1,0 +1,28 @@
+# Read by [ManifestSkip] in dist.ini, which leaves each file that a line here
+# matches out of the tarball.  ExtUtils::Manifest matches each line as a regex
+# against the path from the root, with / between directories, so ^ anchors a
+# line at the root, and a line that ends with / takes the whole directory.
+#
+# The dotfiles, .claude/ and .build/ need no line: [GatherDir] gathers no path
+# with a part that starts with a dot, and [PruneCruft] drops such a path at
+# the root if another plugin adds it.
+# LICENSE needs none either: [GatherDir] leaves it out, so that the copy that
+# [License] writes is the only one.
+
+# This file.  Shipped, it replaces the default list of the release test of the
+# MANIFEST, and that default covers what make leaves in the build.
+^MANIFEST\.SKIP$
+
+# For the people who work on the distribution, not for anyone who installs it.
+^CLAUDE\.md$
+^git-hooks/
+
+# Read by dzil at the build, which writes what they say into META.json,
+# Makefile.PL and the POD.
+^dist\.ini$
+^weaver\.ini$
+^prereqs\.(?:yml|json)$
+^metamerge\.(?:yml|json)$
+
+# What Devel::Cover leaves.
+^cover_db/

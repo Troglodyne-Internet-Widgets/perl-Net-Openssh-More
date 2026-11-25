@@ -741,6 +741,8 @@ no_agent, if that machine is also likely to be counting.
 
 RETURNS a Net::OpenSSH::More object.
 
+    my $ssh = Net::OpenSSH::More->new( host => 'host.test', user => 'tester', retry_max => 3 );
+
 =head3 A note on Authentication order
 
 We attempt to authenticate using the following details, and in this order:
@@ -814,10 +816,19 @@ sub new {
     return $self;
 }
 
-=head2 use_persistent_shell
+=head2 use_persistent_shell($use_shell)
 
 Pass "defined but falsy/truthy" to this to enable using the persistent shell or deactivate its' use.
-Returns either the value you just set or the value it last had (if arg is not defined).
+
+=over 4
+
+=item use_shell - Bool - optional: true to use the persistent shell, false not to
+
+=back
+
+Returns Bool: the value you just set, or the value it last had if C<use_shell> is not defined.
+
+    $ssh->use_persistent_shell(0);
 
 =cut
 
@@ -827,13 +838,24 @@ sub use_persistent_shell {
     return $self->{'_opts'}{'use_persistent_shell'} = $use_shell;
 }
 
-=head2 copy
+=head2 copy($source, $dest)
 
 Copies $SOURCE file on the remote machine to $DEST on the remote machine.
 If you want to sync/copy files from remote to local or vice/versa, use
 the sftp accessor (Net::SFTP::Foreign) instead.
 
+=over 4
+
+=item source - Str - the path of the file to copy, on the remote machine
+
+=item dest - Str - the path of the copy, on the remote machine
+
+=back
+
 Dies in this module, as this varies on different platforms (GNU/LINUX, Windows, etc.)
+A subclass such as L<Net::OpenSSH::More::Linux> implements it.
+
+    $ssh->copy( '/etc/hosts', '/etc/hosts.orig' );
 
 =cut
 
@@ -841,7 +863,7 @@ sub copy {
     die "Unimplemented, use a subclass of this perhaps?";
 }
 
-=head2 B<backup_files (FILES)>
+=head2 backup_files(@files)
 
 Backs up files which you wish to later restore to their original state. If the file does
 not currently exist then the method will still store a reference for later file deletion.
@@ -855,16 +877,20 @@ to be a "non-portable" method -- use the Linux.pm subclass of this if you want t
 to actually backup files without dying, or subclass your own for Windows, however they
 choose to implement `copy` with their newfangled(?) SSH daemon.
 
-C<FILES> - LIST - File(s) to backup.
+=over 4
 
-C<STASH> - BOOL - mv files on backup instead of cp.  This will make sure FILES arg path no
-                  longer exists at all so a fresh FILE can be written during run.
+=item @files - Str - the path of each file to back up
 
-my $file = '/path/to/file.txt';
-$ssh->backup_files($file);
+=back
 
-my @files = ( '/path/to/file.txt', '/path/to/file2.txt' );
-$ssh->backup_files(@files);
+Returns nothing.  Dies when the SFTP connection cannot be made, and, in this
+module, when a file exists, because C<copy> dies here.
+
+    my $file = '/path/to/file.txt';
+    $ssh->backup_files($file);
+
+    my @files = ( '/path/to/file.txt', '/path/to/file2.txt' );
+    $ssh->backup_files(@files);
 
 =cut
 
@@ -897,7 +923,7 @@ sub backup_files {
     return;
 }
 
-=head2 B<restore_files (FILES)>
+=head2 restore_files(@files)
 
 Restores specific file(s) backed up using backup_files(), or all the backup files if none
 are specified, to their previous state.
@@ -906,11 +932,17 @@ If the file in question DID NOT exist when backup_files was last invoked for the
 then the file will instead be deleted, as that was the state of the file previous to
 actions taken in your test or script.
 
-C<FILES> - (Optional) - LIST - File(s) to restore.
+=over 4
 
-my $file = '/path/to/file.txt';
-$ssh->backup_files($file);
-$ssh->restore_files();
+=item @files - Str - optional: the path of each file to restore, or every file that was backed up when there is none
+
+=back
+
+Returns nothing.  Dies when the SFTP connection cannot be made.
+
+    my $file = '/path/to/file.txt';
+    $ssh->backup_files($file);
+    $ssh->restore_files();
 
 =cut
 
@@ -971,15 +1003,21 @@ sub DESTROY {
     return $self->SUPER::DESTROY();
 }
 
-=head2 diag
+=head2 diag(@msgs)
 
 Print a diagnostic message to STDOUT.
 Optionally prefixed by what you passed in as $opts{'output_prefix'} in the constructor.
 I use this in several places when $opts{'debug'} is passed to the constructor.
 
-ACCEPTS LIST of messages.
+=over 4
 
-RETURNS undef.
+=item @msgs - Str - each message, which gets a line of its own
+
+=back
+
+Returns nothing.
+
+    $ssh->diag('Connected');
 
 =cut
 
@@ -1051,9 +1089,19 @@ sub cmd {
     return ( $out, $err, $ret );
 }
 
-=head2 cmd_exit_code
+=head2 cmd_exit_code(@args)
 
 Same thing as cmd but only returns the exit code.
+
+=over 4
+
+=item @args - the arguments of C<cmd>: an optional HASHREF of options, and the command
+
+=back
+
+Returns Int, the exit code of the command.  Dies when no command is given, as C<cmd> does.
+
+    my $code = $ssh->cmd_exit_code(qw{test -d /tmp});
 
 =cut
 
@@ -1061,6 +1109,18 @@ sub cmd_exit_code {
     my ( $self, @args ) = @_;
     return ( $self->cmd(@args) )[2];
 }
+
+=head2 sftp
+
+The L<Net::SFTP::Foreign> object of the connection.  It is made on the first
+call, and the same object is returned after that.
+
+Returns a Net::SFTP::Foreign object.  Dies when the SFTP connection cannot be
+made, with the error of the connection.
+
+    my $content = $ssh->sftp->get_content('/etc/hostname');
+
+=cut
 
 sub sftp {
     my ($self) = @_;
@@ -1072,17 +1132,27 @@ sub sftp {
     return $self->{'_sftp'};
 }
 
-=head3 B<write (FILE,CONTENT,[MOD],[OWN])>
+=head2 write($file, $content, $mode, $owner, $group)
 
 Write a file.
 
-C<FILE> - Absolute path to file.
-C<CONTENT> - Content to write to file.
-C<MOD> - File mode.
-C<OWN> - File owner. Defaults to the user you connected as.
-C<GRP> - File group. Defaults to OWN.
+=over 4
 
-Returns true if all actions are successful, otherwise warn/die about the error.
+=item file - Str - the absolute path of the file
+
+=item content - Str - what to write to the file
+
+=item mode - Str - optional: the mode of the file
+
+=item owner - Str - optional: the owner of the file.  Defaults to the user you connected as, when C<group> is given.
+
+=item group - Str - optional: the group of the file.  Defaults to C<owner>.
+
+=back
+
+Returns the result of the last SFTP call, which is true when it succeeded.
+Warns when the write or the chown fails.  Dies when C<file> or C<content> is
+not defined, or when the SFTP connection cannot be made.
 
     $ssh->write($filename,$content,'600','root');
 
@@ -1109,7 +1179,7 @@ sub write {    ## no critic (Subroutines::ProhibitBuiltinHomonyms, Subroutines::
     return $ret;
 }
 
-=head3 B<eval_full( options )>
+=head2 eval_full(%options)
 
 Run Perl code on the remote system and return the results.
 interpreter defaults to /usr/bin/perl.
@@ -1127,7 +1197,12 @@ B<Output>
 The output from eval_full() is based on the return value of the input
 coderef. Return context is preserved for the coderef.
 
-All error states will generate exceptions.
+Returns what the code returns: a list in list context, and the first value in
+scalar context.
+
+All error states will generate exceptions: it dies when the remote perl cannot
+be started or its pipes cannot be closed, and with the error of the code when
+the code dies.
 
 B<Caveats>
 
@@ -1185,12 +1260,21 @@ sub eval_full {
     return wantarray ? @{ $result->{data} } : $result->{data}[0];
 }
 
-=head3 cmd_stream
+=head2 cmd_stream(@cmd)
 
 Pretty much the same as running cmd() with one important caveat --
 all output is formatted with the configured prefix and *streams* to STDOUT.
 Useful for remote test harness building.
-Returns (exit_code), as in this context that should be all you care about.
+
+=over 4
+
+=item @cmd - Str - the components of the command
+
+=back
+
+Returns Int, the exit code of the command, as in this context that should be all you care about.
+
+    my $code = $ssh->cmd_stream(qw{prove -lv t/});
 
 You may be asking, "well then why not use system?" That does not support
 the prefixing I'm doing here. Essentially we provide a custom line reader
