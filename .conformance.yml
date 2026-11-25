@@ -1,0 +1,11 @@
+flavor: troglodyne-compat
+source:
+  git: https://github.com/Troglodyne-Internet-Widgets/perl-slop-plugin.git
+  path: skills/packaging-perl
+variables:
+  DIST: Net-OpenSSH-More
+  AUTHOR_NAME: George S. Baugh
+  AUTHOR_EMAIL: george@troglodyne.net
+  COPYRIGHT_HOLDER: George S. Baugh
+  YEAR: '2026'
+  CPAN_ID: TEODESIAN
