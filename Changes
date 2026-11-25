@@ -1,19 +1,5 @@
 Revision history for Net-OpenSSH-More
 
-1.08 (not yet released)
-    - Say that a host does not resolve, and which record types were asked
-      for, rather than "Can't determine IP type. $VAR1 = {};"
-    - Fall through to AAAA when the A answer is only a CNAME, so a name
-      that aliases an IPv6-only host resolves
-    - Accept the file permissions that ssh accepts.  new() died unless
-      ~/.ssh was exactly 0700, ~/.ssh/config exactly 0600 and the key
-      exactly 0600, so a ~/.ssh of 0750 or a key of 0400 stopped every
-      connection.  Now it refuses only what ssh refuses: a ~/.ssh or
-      config that the group or others can write, and a key that they can
-      use at all.  The error says the mode and which bits are not allowed
-    - The tests use a home directory of their own, so they no longer
-      fail when the ~/.ssh of the person who runs them is not 0700
-
 1.07 2026-11-20 TEODESIAN
     - Reconnect in the object that the caller holds.  A command that found
       the master gone opened a new one, but the caller's object kept the
