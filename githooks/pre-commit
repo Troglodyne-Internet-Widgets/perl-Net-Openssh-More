@@ -1,4 +1,0 @@
-#!/bin/sh
-make test
-make tidy
-git add -u
