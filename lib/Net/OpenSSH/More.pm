@@ -1144,15 +1144,20 @@ Write a file.
 
 =item mode - Str - optional: the mode of the file
 
-=item owner - Str - optional: the owner of the file.  Defaults to the user you connected as, when C<group> is given.
+=item owner - Str - optional: the owner of the file, as a name or a number.  Defaults to the user you connected as, when C<group> is given.
 
-=item group - Str - optional: the group of the file.  Defaults to C<owner>.
+=item group - Str - optional: the group of the file, as a name or a number.  Defaults to C<owner>.
 
 =back
 
-Returns the result of the last SFTP call, which is true when it succeeded.
-Warns when the write or the chown fails.  Dies when C<file> or C<content> is
-not defined, or when the SFTP connection cannot be made.
+The file is written over SFTP.  When C<owner> or C<group> is given, the
+remote C<chown> command then changes the owner and the group of the file.
+This command runs outside the persistent shell.
+
+Returns true when the last step succeeded: the chown when C<owner> or
+C<group> is given, and the write when they are not.
+Warns when the write or the chown fails, and says why.  Dies when C<file> or
+C<content> is not defined, or when the SFTP connection cannot be made.
 
     $ssh->write($filename,$content,'600','root');
 
@@ -1172,8 +1177,12 @@ sub write {    ## no critic (Subroutines::ProhibitBuiltinHomonyms, Subroutines::
     if ( defined $owner || defined $group ) {
         $owner //= $self->{'_opts'}{'user'};
         $group //= $owner;
-        $ret = $self->sftp()->chown( $file, $owner, $group );
-        warn "[WARN] Couldn't chown $file" if $ret;
+
+        # SFTP's chown takes only numeric ids, so a name needs the remote's own lookup.
+        # Not the persistent shell, because it joins the arguments without quoting them.
+        my ( $out, $err, $code ) = $self->cmd( { 'use_persistent_shell' => 0 }, 'chown', '--', "$owner:$group", $file );
+        $ret = $code == 0;
+        warn "[WARN] Couldn't chown $file: " . ( $out || $err || "chown exited $code" ) if !$ret;
     }
 
     return $ret;
